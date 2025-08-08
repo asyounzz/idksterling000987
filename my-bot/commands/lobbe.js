@@ -641,12 +641,16 @@ module.exports = {
                         if (!updatedLobby || !updatedLobby.gameData) return;
 
                         // Ensure dictionary and usedWords are Sets
-                        const dictionary = new Set(updatedLobby.gameData.dictionary || []);
-                        const usedWords = new Set(updatedLobby.gameData.usedWords || []);
+                        if (!(updatedLobby.gameData.dictionary instanceof Set)) {
+                            updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
+                        }
+                        if (!(updatedLobby.gameData.usedWords instanceof Set)) {
+                            updatedLobby.gameData.usedWords = new Set(updatedLobby.gameData.usedWords || []);
+                        }
 
-                        const isValidWord = dictionary.has(content);
+                        const isValidWord = updatedLobby.gameData.dictionary.has(content);
                         const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
-                        const isWordUsed = usedWords.has(content);
+                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);
 
                         if (isValidWord && containsSequence && !isWordUsed) {
                             msgCollector.stop();
