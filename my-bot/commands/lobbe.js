@@ -145,7 +145,6 @@ function getRandomSequence(dictionary, length = 2, avoidSequences = []) {
  */
 function formatLetters(usedLettersSet) {
     const all = 'abcdefghijklmnopqrstuv'.split('');
-    // Ensure usedLettersSet is a Set and check each letter
     const letterSet = usedLettersSet instanceof Set ? usedLettersSet : new Set();
     return all.map(letter => letterSet.has(letter) ? `🔴${letter}` : `🔵${letter}`).join(' ');
 }
@@ -172,11 +171,13 @@ function createGameEmbed(lobby, currentPlayerId) {
     const gameStartTime = lobby.gameData.gameStartTime || Date.now();
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
     
+    // Fix words played count
     const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords.size || 0;
+    const wordsPlayedCount = usedWords instanceof Set ? usedWords.size : 0;
     
-    // Defensive check: ensure usedLetters is a Map before getting a value.
-    const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
+    // Get current player's used letters for display
+    const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? 
+        (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
     
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
 
@@ -186,8 +187,8 @@ function createGameEmbed(lobby, currentPlayerId) {
         .addFields(
             { name: 'Players & Lives', value: playersLives, inline: true },
             { name: '⏳ Elapsed Time', value: `${elapsedSeconds}s`, inline: true },
-            { name: '🔢 Words Played', value: String(wordsPlayedCount), inline: true },
-            { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
+            { name: '🔢 Words Played', value: wordsPlayedCount.toString(), inline: true },
+            { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.slice(-5).map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
             { name: `🔠 Used Letters (<@${currentPlayerId || 'Unknown'}>)`, value: formatLetters(currentPlayerLetters), inline: false }
         )
         .setFooter({ text: '🔥 Use every letter of the alphabet above to earn an extra life!' })
@@ -652,8 +653,8 @@ module.exports = {
                             clearTimeout(updatedLobby.gameData.timeout);
                             updatedLobby.gameData.timeout = null;
 
-                            usedWords.add(content);
-                            updatedLobby.gameData.usedWords = usedWords;
+                            // Add word to used words set
+                            updatedLobby.gameData.usedWords.add(content);
 
                             // Ensure usedLetters is a Map
                             if (!(updatedLobby.gameData.usedLetters instanceof Map)) {
@@ -664,21 +665,19 @@ module.exports = {
                                 updatedLobby.gameData.usedLetters = usedLettersMap;
                             }
 
-                            // Get the current player's personal used letters set
+                            // Get current player's used letters
                             let playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
                             if (!playerUsedLetters) {
                                 playerUsedLetters = new Set();
                                 updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
                             }
                             
-                            // --- FIX: Logic for tracking letters and giving extra life ---
-                            // Add each letter of the played word to their personal set (only a-v)
-                            for (const letter of content) {
-                                if (letter >= 'a' && letter <= 'v') {
-                                    playerUsedLetters.add(letter);
+                            // Track used letters for current player (a-v only, like bombparty.js)
+                            for (const char of content) {
+                                if (/[a-v]/.test(char)) {
+                                    playerUsedLetters.add(char);
                                 }
                             }
-                            updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
 
                             updatedLobby.gameData.logs.push({
                                 player: currentPlayerId,
@@ -687,17 +686,16 @@ module.exports = {
                             });
                             if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
 
-                            // Check if this player has now completed their alphabet (a-v = 22 letters)
-                            if (playerUsedLetters.size >= 22) {
+                            // Check bonus life if player used all letters a-v (22 letters total)
+                            if (playerUsedLetters.size === 22) {
                                 updatedLobby.gameData.lives[currentPlayerId]++;
+                                playerUsedLetters.clear();
                                 updatedLobby.gameData.logs.push({
                                     player: 'System',
-                                    word: `⭐ <@${currentPlayerId}> completed their alphabet! +1 life!`,
+                                    word: `🎉 <@${currentPlayerId}> completed alphabet! +1 life`,
                                     seq: '—'
                                 });
-                                updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
                             }
-                            // ----------------------------------------------------------------
 
                             // Track sequence history to avoid repetition
                             updatedLobby.gameData.sequenceHistory.push(updatedLobby.gameData.currentSeq);
