@@ -148,7 +148,7 @@ function createGameEmbed(lobby, currentPlayerId) {
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
     
     const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords.size;
+    const wordsPlayedCount = usedWords.size || 0;
     
     // Check if usedLetters is a Map before trying to get a value from it
     const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
