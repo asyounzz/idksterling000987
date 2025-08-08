@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 
-const lobbiesPath = path.join(__dirname, '..', 'games.json');
+const lobbiesPath = path.join(__dirname, '..', 'lobbies.json');
 let lobbies = {};
 
 /**
