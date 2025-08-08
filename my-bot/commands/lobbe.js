@@ -117,9 +117,26 @@ function loadDictionary(language) {
     return new Set(words);
 }
 
-function getRandomSequence(dictionary, length = 2) {
+function getRandomSequence(dictionary, length = 2, avoidSequences = []) {
     const words = Array.from(dictionary).filter(w => w.length >= length);
     if (words.length === 0) return '';
+    
+    let attempts = 0;
+    const maxAttempts = 100; // Prevent infinite loops
+    
+    while (attempts < maxAttempts) {
+        const word = words[Math.floor(Math.random() * words.length)];
+        const start = Math.floor(Math.random() * (word.length - length + 1));
+        const seq = word.substring(start, start + length);
+        
+        // Check if sequence exists in dictionary and isn't in avoid list
+        if ([...dictionary].some(w => w.includes(seq)) && !avoidSequences.includes(seq)) {
+            return seq;
+        }
+        attempts++;
+    }
+    
+    // Fallback: if we can't avoid the sequences, just return any valid one
     while (true) {
         const word = words[Math.floor(Math.random() * words.length)];
         const start = Math.floor(Math.random() * (word.length - length + 1));
@@ -159,7 +176,10 @@ function createGameEmbed(lobby, currentPlayerId) {
     const wordsPlayedCount = lobby.gameData.wordsPlayedCount || 0;
 
     // Check if usedLetters is a Map before trying to get a value from it
-    const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
+    let currentPlayerLetters = new Set();
+    if (lobby.gameData.usedLetters instanceof Map) {
+        currentPlayerLetters = lobby.gameData.usedLetters.get(currentPlayerId) || new Set();
+    }
 
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
 
@@ -491,6 +511,7 @@ module.exports = {
                     initialUsedLetters.set(id, new Set());
                 });
 
+                const initialSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
                 const currentLobby = lobbies[guildId][gameId];
                 currentLobby.gameData = {
                     dictionary: dictionary,
@@ -498,7 +519,8 @@ module.exports = {
                     usedLetters: initialUsedLetters,
                     logs: [],
                     lives: initialLives,
-                    currentSeq: getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3),
+                    currentSeq: initialSeq,
+                    sequenceHistory: [initialSeq],
                     currentPlayerIndex: 0,
                     gameStartTime: Date.now(),
                     timeout: null,
@@ -648,7 +670,7 @@ module.exports = {
                                 }
                             }
                             
-                            // Update the map with the modified set
+                            // Ensure the updated set is saved back to the map
                             updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
 
                             // Initialize wordsPlayedCount if it doesn't exist
@@ -676,7 +698,19 @@ module.exports = {
                                 updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
                             }
 
-                            updatedLobby.gameData.currentSeq = getRandomSequence(updatedLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
+                            // Track sequence history to avoid repetition
+                            updatedLobby.gameData.sequenceHistory.push(updatedLobby.gameData.currentSeq);
+                            if (updatedLobby.gameData.sequenceHistory.length > 3) {
+                                updatedLobby.gameData.sequenceHistory.shift();
+                            }
+                            
+                            // Generate new sequence avoiding recent ones
+                            const avoidSequences = updatedLobby.gameData.sequenceHistory.slice(-2); // Avoid last 2 sequences
+                            updatedLobby.gameData.currentSeq = getRandomSequence(
+                                updatedLobby.gameData.dictionary, 
+                                Math.random() < 0.5 ? 2 : 3,
+                                avoidSequences
+                            );
                             updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
                             while (updatedLobby.gameData.lives[playersInGame[updatedLobby.gameData.currentPlayerIndex]] <= 0) {
                                 updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
