@@ -12,12 +12,12 @@ const {
 const fs = require('fs');
 const path = require('path');
 
-const lobbiesPath = path.join(__dirname, '..', 'lobbies.json');
+const lobbiesPath = path.join(__dirname, '..', 'commands', 'lobbies.json');
 let lobbies = {};
 
 /**
  * Loads lobbies from the JSON file, converting arrays back to Sets and Maps.
- * Includes defensive checks to prevent crashes if game data properties are missing.
+ * Dictionary is reloaded from text files, not from JSON.
  */
 function loadLobbies() {
     if (fs.existsSync(lobbiesPath)) {
@@ -28,23 +28,24 @@ function loadLobbies() {
             for (const gameId in parsedLobbies[guildId]) {
                 const lobby = parsedLobbies[guildId][gameId];
                 if (lobby.gameData) {
-                    // Defensive check: if usedWords is not present, default to an empty array.
-                    // Handle both Set and Array formats
+                    // Convert usedWords array back to Set
                     const usedWordsData = lobby.gameData.usedWords || [];
                     lobby.gameData.usedWords = new Set(Array.isArray(usedWordsData) ? usedWordsData : []);
                     
+                    // Convert usedLetters object back to Map
                     const usedLettersMap = new Map();
-                    // Defensive check: if usedLetters is not an object, default to an empty one.
                     if (lobby.gameData.usedLetters) {
                         for (const userId in lobby.gameData.usedLetters) {
-                            // Defensive check: if a user's letters are not an array, default to an empty one.
                             usedLettersMap.set(userId, new Set(lobby.gameData.usedLetters[userId] || []));
                         }
                     }
                     lobby.gameData.usedLetters = usedLettersMap;
-                    // Defensive check: if dictionary is not present, default to an empty array.
-                    lobby.gameData.dictionary = new Set(lobby.gameData.dictionary || []);
-                    // Defensive check for sequenceHistory
+                    
+                    // Reload dictionary from text file based on lobby language
+                    const language = lobby.settings?.language || 'english';
+                    lobby.gameData.dictionary = loadDictionary(language);
+                    
+                    // Ensure sequenceHistory exists
                     lobby.gameData.sequenceHistory = lobby.gameData.sequenceHistory || [];
                 }
             }
@@ -52,13 +53,14 @@ function loadLobbies() {
         lobbies = parsedLobbies;
         console.log(`📂 Loaded ${Object.keys(lobbies).length} guild(s) with games from JSON`);
     } else {
-        console.log(`📂 No existing games.json file found, starting fresh`);
+        console.log(`📂 No existing lobbies.json file found, starting fresh`);
     }
 }
 loadLobbies();
 
 /**
  * Saves lobbies to the JSON file, converting Sets to arrays for serialization.
+ * Dictionary is NOT saved to JSON as it's loaded from text files.
  */
 function saveLobbies() {
     const lobbiesToSave = {};
@@ -69,13 +71,15 @@ function saveLobbies() {
             const newLobby = { ...lobby };
 
             if (newLobby.gameData) {
+                // Convert usedWords Set to Array
                 if (newLobby.gameData.usedWords) {
                     newLobby.gameData.usedWords = Array.from(newLobby.gameData.usedWords);
                 }
-                if (newLobby.gameData.dictionary) {
-                    newLobby.gameData.dictionary = Array.from(newLobby.gameData.dictionary);
-                }
+                
+                // DO NOT save dictionary - it will be reloaded from text files
+                delete newLobby.gameData.dictionary;
 
+                // Convert usedLetters Map to Object
                 if (newLobby.gameData.usedLetters instanceof Map) {
                     const usedLettersObject = {};
                     for (const [userId, letterSet] of newLobby.gameData.usedLetters.entries()) {
