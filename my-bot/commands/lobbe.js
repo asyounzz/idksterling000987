@@ -12,12 +12,15 @@ const {
 const fs = require('fs');
 const path = require('path');
 
-const lobbiesPath = path.join(__dirname, '..', 'commands', 'lobbies.json');
+const lobbiesPath = path.join(__dirname, '..', 'lobbies.json');
 let lobbies = {};
 
 /**
  * Loads lobbies from the JSON file, converting arrays back to Sets and Maps.
- * Dictionary is reloaded from text files, not from JSON.
+ */
+/**
+ * Loads lobbies from the JSON file, converting arrays back to Sets and Maps.
+ * Includes defensive checks to prevent crashes if game data properties are missing.
  */
 function loadLobbies() {
     if (fs.existsSync(lobbiesPath)) {
@@ -28,39 +31,38 @@ function loadLobbies() {
             for (const gameId in parsedLobbies[guildId]) {
                 const lobby = parsedLobbies[guildId][gameId];
                 if (lobby.gameData) {
-                    // Convert usedWords array back to Set
-                    const usedWordsData = lobby.gameData.usedWords || [];
-                    lobby.gameData.usedWords = new Set(Array.isArray(usedWordsData) ? usedWordsData : []);
-                    
-                    // Convert usedLetters object back to Map
+                    // Defensive check: if usedWords is not present, default to an empty array.
+                    lobby.gameData.usedWords = new Set(lobby.gameData.usedWords || []);
+
                     const usedLettersMap = new Map();
+                    // Defensive check: if usedLetters is not an object, default to an empty one.
                     if (lobby.gameData.usedLetters) {
                         for (const userId in lobby.gameData.usedLetters) {
+                            // Defensive check: if a user's letters are not an array, default to an empty one.
                             usedLettersMap.set(userId, new Set(lobby.gameData.usedLetters[userId] || []));
                         }
                     }
                     lobby.gameData.usedLetters = usedLettersMap;
-                    
-                    // Reload dictionary from text file based on lobby language
-                    const language = lobby.settings?.language || 'english';
-                    lobby.gameData.dictionary = loadDictionary(language);
-                    
-                    // Ensure sequenceHistory exists
-                    lobby.gameData.sequenceHistory = lobby.gameData.sequenceHistory || [];
+                    // Defensive check: if dictionary is not present, default to an empty array.
+                    // Also ensure it's converted to a Set whether it's an array or already a Set
+                    if (Array.isArray(lobby.gameData.dictionary)) {
+                        lobby.gameData.dictionary = new Set(lobby.gameData.dictionary);
+                    } else if (!(lobby.gameData.dictionary instanceof Set)) {
+                        lobby.gameData.dictionary = new Set();
+                    }
                 }
             }
         }
         lobbies = parsedLobbies;
-        console.log(`📂 Loaded ${Object.keys(lobbies).length} guild(s) with games from JSON`);
-    } else {
-        console.log(`📂 No existing lobbies.json file found, starting fresh`);
     }
 }
+
+
+
 loadLobbies();
 
 /**
  * Saves lobbies to the JSON file, converting Sets to arrays for serialization.
- * Dictionary is NOT saved to JSON as it's loaded from text files.
  */
 function saveLobbies() {
     const lobbiesToSave = {};
@@ -68,18 +70,19 @@ function saveLobbies() {
         lobbiesToSave[guildId] = {};
         for (const gameId in lobbies[guildId]) {
             const lobby = lobbies[guildId][gameId];
-            const newLobby = { ...lobby };
+            const newLobby = { ...lobby
+            };
 
+            // Convert Sets to arrays for saving
             if (newLobby.gameData) {
-                // Convert usedWords Set to Array
                 if (newLobby.gameData.usedWords) {
                     newLobby.gameData.usedWords = Array.from(newLobby.gameData.usedWords);
                 }
-                
-                // DO NOT save dictionary - it will be reloaded from text files
-                delete newLobby.gameData.dictionary;
+                if (newLobby.gameData.dictionary) {
+                    newLobby.gameData.dictionary = Array.from(newLobby.gameData.dictionary);
+                }
 
-                // Convert usedLetters Map to Object
+                // Check if usedLetters is a Map before trying to use .entries()
                 if (newLobby.gameData.usedLetters instanceof Map) {
                     const usedLettersObject = {};
                     for (const [userId, letterSet] of newLobby.gameData.usedLetters.entries()) {
@@ -87,9 +90,9 @@ function saveLobbies() {
                     }
                     newLobby.gameData.usedLetters = usedLettersObject;
                 }
-                
-                // Debug logging to confirm data is being saved
-                console.log(`💾 Saving game ${gameId} - Words: ${newLobby.gameData.usedWords?.length || 0}, Logs: ${newLobby.gameData.logs?.length || 0}`);
+
+                // Remove timeout object as it can't be serialized
+                delete newLobby.gameData.timeout;
             }
             lobbiesToSave[guildId][gameId] = newLobby;
         }
@@ -114,19 +117,12 @@ function loadDictionary(language) {
     return new Set(words);
 }
 
-/**
- * Generates a random sequence, ensuring it's not in the avoidSequences list.
- * @param {Set<string>} dictionary The dictionary of words.
- * @param {number} length The desired length of the sequence.
- * @param {string[]} [avoidSequences=[]] An array of sequences to avoid.
- * @returns {string} The generated sequence.
- */
 function getRandomSequence(dictionary, length = 2, avoidSequences = []) {
     const words = Array.from(dictionary).filter(w => w.length >= length);
     if (words.length === 0) return '';
     
     let attempts = 0;
-    const maxAttempts = 100;
+    const maxAttempts = 100; // Prevent infinite loops
     
     while (attempts < maxAttempts) {
         const word = words[Math.floor(Math.random() * words.length)];
@@ -149,58 +145,53 @@ function getRandomSequence(dictionary, length = 2, avoidSequences = []) {
     }
 }
 
-/**
- * Formats the letters for the embed field, showing red for used letters.
- * @param {Set<string>} usedLettersSet The set of letters the player has used.
- * @returns {string} A string of emojis and letters.
- */
 function formatLetters(usedLettersSet) {
     const all = 'abcdefghijklmnopqrstuv'.split('');
-    const letterSet = usedLettersSet instanceof Set ? usedLettersSet : new Set();
-    return all.map(letter => letterSet.has(letter) ? `🔴${letter}` : `🔵${letter}`).join(' ');
+    return all.map(letter => usedLettersSet.has(letter) ? `🔴${letter}` : `🔵${letter}`).join(' ');
 }
 
 /**
- * Creates the game embed with all the game data.
- * @param {object} lobby The current lobby object.
- * @param {string} currentPlayerId The ID of the current player.
- * @returns {EmbedBuilder} The formatted game embed.
+ * Creates the game embed, with defensive checks for all properties.
+ * This prevents crashes when the game is not active or data is missing.
  */
 function createGameEmbed(lobby, currentPlayerId) {
+    // This check is the most important for handling the initial lobby state
     if (!lobby || !lobby.gameData) {
         return new EmbedBuilder()
-            .setTitle(`🎯 Lobby - ${lobby?.gameId || 'Unknown'}`)
+            .setTitle(`🎯 Lobby - ${lobby.gameId}`)
             .setDescription('Game is not yet started or has ended.')
             .setColor('Blue');
     }
-    
+
+    // Now we defensively check each property as we access it to avoid future errors.
     const livesData = lobby.gameData.lives || {};
     const playersLives = Object.entries(livesData).map(([id, lives]) => `<@${id}>: ${'❤️'.repeat(lives || 0)}`).join('\n') || 'No players.';
-    
+
     const logs = lobby.gameData.logs || [];
-    
+
     const gameStartTime = lobby.gameData.gameStartTime || Date.now();
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
-    
-    // Fix words played count
-    const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords instanceof Set ? usedWords.size : (Array.isArray(usedWords) ? usedWords.length : 0);
-    
-    // Get current player's used letters for display
-    const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? 
-        (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
-    
+
+    // Use the dedicated counter for words played
+    const wordsPlayedCount = lobby.gameData.wordsPlayedCount || 0;
+
+    // Check if usedLetters is a Map before trying to get a value from it
+    let currentPlayerLetters = new Set();
+    if (lobby.gameData.usedLetters instanceof Map) {
+        currentPlayerLetters = lobby.gameData.usedLetters.get(currentPlayerId) || new Set();
+    }
+
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
 
     return new EmbedBuilder()
-        .setTitle(`💣 BombParty - Lobby ${lobby.gameId || 'Unknown'}`)
+        .setTitle(`💣 BombParty - Lobby ${lobby.gameId}`)
         .setDescription(`**Current Sequence:** \`${currentSeq}\``)
         .addFields(
             { name: 'Players & Lives', value: playersLives, inline: true },
             { name: '⏳ Elapsed Time', value: `${elapsedSeconds}s`, inline: true },
             { name: '🔢 Words Played', value: wordsPlayedCount.toString(), inline: true },
-            { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.slice(-5).map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
-            { name: `🔠 Used Letters (<@${currentPlayerId || 'Unknown'}>)`, value: formatLetters(currentPlayerLetters), inline: false }
+            { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
+            { name: `🔠 Used Letters (<@${currentPlayerId}>)`, value: formatLetters(currentPlayerLetters), inline: false }
         )
         .setFooter({ text: '🔥 Use every letter of the alphabet above to earn an extra life!' })
         .setColor(0xffcc00);
@@ -520,6 +511,7 @@ module.exports = {
                     initialUsedLetters.set(id, new Set());
                 });
 
+                const initialSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
                 const currentLobby = lobbies[guildId][gameId];
                 currentLobby.gameData = {
                     dictionary: dictionary,
@@ -527,20 +519,14 @@ module.exports = {
                     usedLetters: initialUsedLetters,
                     logs: [],
                     lives: initialLives,
-                    // Store a history of sequences to avoid repetition
-                    sequenceHistory: [],
-                    currentSeq: '', // Will be set on the first turn
+                    currentSeq: initialSeq,
+                    sequenceHistory: [initialSeq],
                     currentPlayerIndex: 0,
                     gameStartTime: Date.now(),
                     timeout: null,
                     isGameActive: true,
+                    wordsPlayedCount: 0,
                 };
-                
-                // Get the first sequence and add it to the history
-                const firstSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
-                currentLobby.gameData.currentSeq = firstSeq;
-                currentLobby.gameData.sequenceHistory.push(firstSeq);
-
                 saveLobbies();
 
                 collector.stop('started');
@@ -579,6 +565,7 @@ module.exports = {
 
                     clearTimeout(currentLobby.gameData.timeout);
                     currentLobby.gameData.isGameActive = false;
+                    saveLobbies();
 
                     await interaction.editReply({
                         content: reason,
@@ -586,12 +573,7 @@ module.exports = {
                         components: [],
                     }).catch(() => {});
 
-                    // Clean up the game from memory and JSON file
                     delete lobbies[guildId][gameId];
-                    // If no games left in this guild, remove the guild entry
-                    if (Object.keys(lobbies[guildId] || {}).length === 0) {
-                        delete lobbies[guildId];
-                    }
                     saveLobbies();
                 };
 
@@ -599,11 +581,14 @@ module.exports = {
                     const currentLobby = lobbies[guildId][gameId];
                     if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
 
+                    // Clear any existing timeout first
                     clearTimeout(currentLobby.gameData.timeout);
+                    currentLobby.gameData.timeout = null;
+                    
                     await updateGameMessage();
 
                     const currentPlayerId = playersInGame[currentLobby.gameData.currentPlayerIndex];
-                    
+
                     const msgCollector = interaction.channel.createMessageCollector({
                         filter: m => m.author.id === currentPlayerId,
                         time: currentLobby.settings.turnTime * 1000
@@ -619,29 +604,12 @@ module.exports = {
                         });
                         if (currentLobby.gameData.logs.length > 5) currentLobby.gameData.logs.splice(0, currentLobby.gameData.logs.length - 5);
                         
-                        // --- FIX: Change sequence on timeout failure ---
-                        // Get last two sequences to avoid repetition
-                        const avoidSequences = currentLobby.gameData.sequenceHistory.slice(-2);
-                        currentLobby.gameData.currentSeq = getRandomSequence(
-                            currentLobby.gameData.dictionary,
-                            Math.random() < 0.5 ? 2 : 3,
-                            avoidSequences
-                        );
-                        currentLobby.gameData.sequenceHistory.push(currentLobby.gameData.currentSeq);
-                        // Keep history to a max of 3 sequences
-                        if (currentLobby.gameData.sequenceHistory.length > 3) {
-                            currentLobby.gameData.sequenceHistory.shift();
-                        }
-                        // ----------------------------------------------
-
+                        // Clear timeout reference
                         currentLobby.gameData.timeout = null;
-                        
-                        // Save the game state after timeout
                         saveLobbies();
 
                         if (Object.values(currentLobby.gameData.lives).filter(lives => lives > 0).length <= 1) {
-                            const winner = Object.keys(currentLobby.gameData.lives).find(id => currentLobby.gameData.lives[id] > 0);
-                            await endGame(`🎉 Game over! The winner is <@${winner}>`);
+                            await endGame(`🎉 Game over! The winner is <@${Object.keys(currentLobby.gameData.lives).find(id => currentLobby.gameData.lives[id] > 0)}>`);
                             return;
                         }
 
@@ -658,10 +626,12 @@ module.exports = {
                         const updatedLobby = lobbies[guildId][gameId];
                         if (!updatedLobby || !updatedLobby.gameData) return;
 
-                        // Ensure dictionary and usedWords are Sets
+                        // Ensure dictionary is a Set
                         if (!(updatedLobby.gameData.dictionary instanceof Set)) {
                             updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
                         }
+
+                        // Ensure usedWords is a Set
                         if (!(updatedLobby.gameData.usedWords instanceof Set)) {
                             updatedLobby.gameData.usedWords = new Set(updatedLobby.gameData.usedWords || []);
                         }
@@ -675,7 +645,6 @@ module.exports = {
                             clearTimeout(updatedLobby.gameData.timeout);
                             updatedLobby.gameData.timeout = null;
 
-                            // Add word to used words set
                             updatedLobby.gameData.usedWords.add(content);
 
                             // Ensure usedLetters is a Map
@@ -687,19 +656,28 @@ module.exports = {
                                 updatedLobby.gameData.usedLetters = usedLettersMap;
                             }
 
-                            // Get current player's used letters
+                            // Get the current player's personal used letters set
                             let playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
                             if (!playerUsedLetters) {
                                 playerUsedLetters = new Set();
                                 updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
                             }
                             
-                            // Track used letters for current player (a-v only, like bombparty.js)
-                            for (const char of content) {
-                                if (/[a-v]/.test(char)) {
-                                    playerUsedLetters.add(char);
+                            // Add each letter of the played word to their personal set (only a-v)
+                            for (const letter of content) {
+                                if (letter >= 'a' && letter <= 'v') {
+                                    playerUsedLetters.add(letter);
                                 }
                             }
+                            
+                            // Ensure the updated set is saved back to the map
+                            updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
+
+                            // Initialize wordsPlayedCount if it doesn't exist
+                            if (!updatedLobby.gameData.wordsPlayedCount) {
+                                updatedLobby.gameData.wordsPlayedCount = 0;
+                            }
+                            updatedLobby.gameData.wordsPlayedCount++;
 
                             updatedLobby.gameData.logs.push({
                                 player: currentPlayerId,
@@ -708,17 +686,16 @@ module.exports = {
                             });
                             if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
 
-                            // Check bonus life if player used all letters a-v (22 letters total)
-                            if (playerUsedLetters.size === 22) {
+                            // Check if this player has now completed their alphabet (a-v = 22 letters)
+                            if (playerUsedLetters.size >= 22) {
                                 updatedLobby.gameData.lives[currentPlayerId]++;
-                                playerUsedLetters.clear();
                                 updatedLobby.gameData.logs.push({
                                     player: 'System',
-                                    word: `🎉 <@${currentPlayerId}> completed alphabet! +1 life`,
+                                    word: `<@${currentPlayerId}> completed alphabet! +1 life`,
                                     seq: '—'
                                 });
-                                // Save immediately when bonus life is awarded
-                                saveLobbies();
+                                // Reset the player's alphabet to start over
+                                updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
                             }
 
                             // Track sequence history to avoid repetition
@@ -728,7 +705,7 @@ module.exports = {
                             }
                             
                             // Generate new sequence avoiding recent ones
-                            const avoidSequences = updatedLobby.gameData.sequenceHistory.slice(-2);
+                            const avoidSequences = updatedLobby.gameData.sequenceHistory.slice(-2); // Avoid last 2 sequences
                             updatedLobby.gameData.currentSeq = getRandomSequence(
                                 updatedLobby.gameData.dictionary, 
                                 Math.random() < 0.5 ? 2 : 3,
@@ -739,7 +716,6 @@ module.exports = {
                                 updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
                             }
 
-                            // Save the game state after each valid word
                             saveLobbies();
                             await nextTurn();
                         } else {
@@ -747,14 +723,36 @@ module.exports = {
                             let reason;
                             if (!isValidWord) {
                                 reason = 'Invalid word';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
                             } else if (!containsSequence) {
-                                reason = 'Does not contain sequence';
+                                reason = 'No sequence';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
                             } else if (isWordUsed) {
                                 reason = 'Already used';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
                             }
                             
+                            if (updatedLobby.gameData.logs.length > 5) {
+                                updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+                            }
+                            
+                            saveLobbies();
+                            await updateGameMessage();
+                            
                             await interaction.followUp({
-                                content: `❌ Invalid word: **${content}**. Reason: ${reason}. Try again.`,
+                                content: `❌ ${reason}. Try again.`,
                                 ephemeral: true
                             });
                         }
@@ -822,7 +820,7 @@ module.exports = {
                     content: '❌ Only the owner can change settings.',
                     ephemeral: true
                 });
-                
+
                 const value = i.values[0];
 
                 if (value === 'english' || value === 'french') {

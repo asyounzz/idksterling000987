@@ -1,0 +1,49 @@
+{
+  "972244217927712899": {
+    "ytyaosx7a3": {
+      "gameId": "ytyaosx7a3",
+      "channelId": "972244217927712902",
+      "owner": "1129725971541540975",
+      "players": [
+        "1129725971541540975",
+        "1265799891607879853"
+      ],
+      "banned": [],
+      "maxPlayers": 2,
+      "settings": {
+        "language": "english",
+        "lives": 3,
+        "turnTime": 10
+      },
+      "lastActivity": 1754657509385,
+      "gameData": {
+        "usedWords": [],
+        "usedLetters": {
+          "1129725971541540975": [],
+          "1265799891607879853": []
+        },
+        "logs": [
+          {
+            "player": "1129725971541540975",
+            "word": "❌ Timeout",
+            "seq": "ve"
+          }
+        ],
+        "lives": {
+          "1129725971541540975": 2,
+          "1265799891607879853": 3
+        },
+        "sequenceHistory": [
+          "ve",
+          ""
+        ],
+        "currentSeq": "",
+        "currentPlayerIndex": 0,
+        "gameStartTime": 1754657510067,
+        "timeout": null,
+        "isGameActive": true
+      },
+      "gameMessageId": "1403359927925215272"
+    }
+  }
+}
