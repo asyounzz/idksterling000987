@@ -90,6 +90,9 @@ function saveLobbies() {
                     }
                     newLobby.gameData.usedLetters = usedLettersObject;
                 }
+
+                // Remove timeout object as it can't be serialized
+                delete newLobby.gameData.timeout;
             }
             lobbiesToSave[guildId][gameId] = newLobby;
         }
