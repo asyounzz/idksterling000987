@@ -29,7 +29,9 @@ function loadLobbies() {
                 const lobby = parsedLobbies[guildId][gameId];
                 if (lobby.gameData) {
                     // Defensive check: if usedWords is not present, default to an empty array.
-                    lobby.gameData.usedWords = new Set(lobby.gameData.usedWords || []);
+                    // Handle both Set and Array formats
+                    const usedWordsData = lobby.gameData.usedWords || [];
+                    lobby.gameData.usedWords = new Set(Array.isArray(usedWordsData) ? usedWordsData : []);
                     
                     const usedLettersMap = new Map();
                     // Defensive check: if usedLetters is not an object, default to an empty one.
@@ -48,6 +50,9 @@ function loadLobbies() {
             }
         }
         lobbies = parsedLobbies;
+        console.log(`📂 Loaded ${Object.keys(lobbies).length} guild(s) with games from JSON`);
+    } else {
+        console.log(`📂 No existing games.json file found, starting fresh`);
     }
 }
 loadLobbies();
@@ -61,8 +66,7 @@ function saveLobbies() {
         lobbiesToSave[guildId] = {};
         for (const gameId in lobbies[guildId]) {
             const lobby = lobbies[guildId][gameId];
-            const newLobby = { ...lobby
-            };
+            const newLobby = { ...lobby };
 
             if (newLobby.gameData) {
                 if (newLobby.gameData.usedWords) {
@@ -79,6 +83,9 @@ function saveLobbies() {
                     }
                     newLobby.gameData.usedLetters = usedLettersObject;
                 }
+                
+                // Debug logging to confirm data is being saved
+                console.log(`💾 Saving game ${gameId} - Words: ${newLobby.gameData.usedWords?.length || 0}, Logs: ${newLobby.gameData.logs?.length || 0}`);
             }
             lobbiesToSave[guildId][gameId] = newLobby;
         }
@@ -173,7 +180,7 @@ function createGameEmbed(lobby, currentPlayerId) {
     
     // Fix words played count
     const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords instanceof Set ? usedWords.size : 0;
+    const wordsPlayedCount = usedWords instanceof Set ? usedWords.size : (Array.isArray(usedWords) ? usedWords.length : 0);
     
     // Get current player's used letters for display
     const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? 
@@ -624,6 +631,8 @@ module.exports = {
                         // ----------------------------------------------
 
                         currentLobby.gameData.timeout = null;
+                        
+                        // Save the game state after timeout
                         saveLobbies();
 
                         if (Object.values(currentLobby.gameData.lives).filter(lives => lives > 0).length <= 1) {
@@ -704,6 +713,8 @@ module.exports = {
                                     word: `🎉 <@${currentPlayerId}> completed alphabet! +1 life`,
                                     seq: '—'
                                 });
+                                // Save immediately when bonus life is awarded
+                                saveLobbies();
                             }
 
                             // Track sequence history to avoid repetition
@@ -724,6 +735,7 @@ module.exports = {
                                 updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
                             }
 
+                            // Save the game state after each valid word
                             saveLobbies();
                             await nextTurn();
                         } else {
