@@ -175,10 +175,18 @@ function createGameEmbed(lobby, currentPlayerId) {
     // Use the dedicated counter for words played
     const wordsPlayedCount = lobby.gameData.wordsPlayedCount || 0;
 
-    // Check if usedLetters is a Map before trying to get a value from it
+    // Ensure usedLetters is properly structured as a Map
     let currentPlayerLetters = new Set();
     if (lobby.gameData.usedLetters instanceof Map) {
         currentPlayerLetters = lobby.gameData.usedLetters.get(currentPlayerId) || new Set();
+    } else if (lobby.gameData.usedLetters && typeof lobby.gameData.usedLetters === 'object') {
+        // Convert from object format if needed
+        const usedLettersMap = new Map();
+        for (const userId in lobby.gameData.usedLetters) {
+            usedLettersMap.set(userId, new Set(lobby.gameData.usedLetters[userId] || []));
+        }
+        lobby.gameData.usedLetters = usedLettersMap;
+        currentPlayerLetters = usedLettersMap.get(currentPlayerId) || new Set();
     }
 
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
@@ -604,6 +612,22 @@ module.exports = {
                         });
                         if (currentLobby.gameData.logs.length > 5) currentLobby.gameData.logs.splice(0, currentLobby.gameData.logs.length - 5);
                         
+                        // Generate new sequence avoiding recent ones after timeout
+                        let newSequence;
+                        let attempts = 0;
+                        do {
+                            newSequence = getRandomSequence(currentLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
+                            attempts++;
+                        } while (currentLobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
+                        
+                        currentLobby.gameData.currentSeq = newSequence;
+                        
+                        // Track sequence history to avoid repetition (keep last 5 sequences)
+                        currentLobby.gameData.sequenceHistory.push(newSequence);
+                        if (currentLobby.gameData.sequenceHistory.length > 5) {
+                            currentLobby.gameData.sequenceHistory.shift();
+                        }
+                        
                         // Clear timeout reference
                         currentLobby.gameData.timeout = null;
                         saveLobbies();
@@ -694,23 +718,26 @@ module.exports = {
                                     word: `<@${currentPlayerId}> completed alphabet! +1 life`,
                                     seq: '—'
                                 });
+                                if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
                                 // Reset the player's alphabet to start over
                                 updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
                             }
 
-                            // Track sequence history to avoid repetition
-                            updatedLobby.gameData.sequenceHistory.push(updatedLobby.gameData.currentSeq);
-                            if (updatedLobby.gameData.sequenceHistory.length > 3) {
+                            // Generate new sequence avoiding recent ones
+                            let newSequence;
+                            let attempts = 0;
+                            do {
+                                newSequence = getRandomSequence(updatedLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
+                                attempts++;
+                            } while (updatedLobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
+                            
+                            updatedLobby.gameData.currentSeq = newSequence;
+                            
+                            // Track sequence history to avoid repetition (keep last 5 sequences)
+                            updatedLobby.gameData.sequenceHistory.push(newSequence);
+                            if (updatedLobby.gameData.sequenceHistory.length > 5) {
                                 updatedLobby.gameData.sequenceHistory.shift();
                             }
-                            
-                            // Generate new sequence avoiding recent ones
-                            const avoidSequences = updatedLobby.gameData.sequenceHistory.slice(-2); // Avoid last 2 sequences
-                            updatedLobby.gameData.currentSeq = getRandomSequence(
-                                updatedLobby.gameData.dictionary, 
-                                Math.random() < 0.5 ? 2 : 3,
-                                avoidSequences
-                            );
                             updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
                             while (updatedLobby.gameData.lives[playersInGame[updatedLobby.gameData.currentPlayerIndex]] <= 0) {
                                 updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
