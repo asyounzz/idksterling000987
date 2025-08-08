@@ -12,3 +12,18 @@ channel = "stable-24_11"
 run = ["node", "index.js"]
 deploymentTarget = "autoscale"
 ignorePorts = false
+
+[workflows]
+
+[[workflows.workflow]]
+name = "Hi"
+mode = "parallel"
+author = 37293724
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node my-bot/index.js & node my-bot/deploy-commands.js"
+
+[[ports]]
+localPort = 4000
+externalPort = 80

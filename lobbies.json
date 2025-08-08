@@ -1,0 +1,69 @@
+{
+  "VFALRRVHQG": {
+    "guildId": "972244217927712899",
+    "channelId": "972244217927712902",
+    "gameId": "VFALRRVHQG",
+    "ownerId": "1129725971541540975",
+    "maxPlayers": 6,
+    "players": [
+      "1129725971541540975"
+    ],
+    "banned": [],
+    "settings": {
+      "language": "fr",
+      "lives": 3,
+      "turnTime": 20
+    },
+    "lastActive": 1754593084945
+  },
+  "TZYAQKJGBG": {
+    "guildId": "972244217927712899",
+    "channelId": "972244217927712902",
+    "gameId": "TZYAQKJGBG",
+    "ownerId": "1129725971541540975",
+    "maxPlayers": 2,
+    "players": [
+      "1129725971541540975",
+      "1265799891607879853"
+    ],
+    "banned": [],
+    "settings": {
+      "language": "fr",
+      "lives": 3,
+      "turnTime": 20
+    },
+    "lastActive": 1754604539715
+  },
+  "jOT7ExSP44": {
+    "guildId": "972244217927712899",
+    "ownerId": "1265799891607879853",
+    "players": [
+      "1129725971541540975",
+      "1265799891607879853"
+    ],
+    "banned": [],
+    "maxPlayers": 2,
+    "settings": {
+      "language": "fr",
+      "lives": 5,
+      "turnTime": 20
+    },
+    "lastActivity": 1754605124052
+  },
+  "VpYm4gaINe": {
+    "guildId": "972244217927712899",
+    "ownerId": "1129725971541540975",
+    "players": [
+      "1129725971541540975",
+      "1265799891607879853"
+    ],
+    "banned": [],
+    "maxPlayers": 2,
+    "settings": {
+      "language": "en",
+      "lives": 3,
+      "turnTime": 10
+    },
+    "lastActivity": 1754605476185
+  }
+}
