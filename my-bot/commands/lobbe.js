@@ -33,7 +33,7 @@ function loadLobbies() {
                 if (lobby.gameData) {
                     // Defensive check: if usedWords is not present, default to an empty array.
                     lobby.gameData.usedWords = new Set(lobby.gameData.usedWords || []);
-                    
+
                     const usedLettersMap = new Map();
                     // Defensive check: if usedLetters is not an object, default to an empty one.
                     if (lobby.gameData.usedLetters) {
@@ -57,8 +57,8 @@ function loadLobbies() {
     }
 }
 
-        
-            
+
+
 loadLobbies();
 
 /**
@@ -142,22 +142,22 @@ function createGameEmbed(lobby, currentPlayerId) {
             .setDescription('Game is not yet started or has ended.')
             .setColor('Blue');
     }
-    
+
     // Now we defensively check each property as we access it to avoid future errors.
     const livesData = lobby.gameData.lives || {};
     const playersLives = Object.entries(livesData).map(([id, lives]) => `<@${id}>: ${'❤️'.repeat(lives || 0)}`).join('\n') || 'No players.';
-    
+
     const logs = lobby.gameData.logs || [];
-    
+
     const gameStartTime = lobby.gameData.gameStartTime || Date.now();
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
-    
+
     const usedWords = lobby.gameData.usedWords || new Set();
     const wordsPlayedCount = usedWords.size || 0;
-    
+
     // Check if usedLetters is a Map before trying to get a value from it
     const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
-    
+
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
 
     return new EmbedBuilder()
@@ -613,6 +613,15 @@ module.exports = {
 
                             updatedLobby.gameData.usedWords.add(content);
 
+                            // Ensure usedLetters is a Map
+                            if (!(updatedLobby.gameData.usedLetters instanceof Map)) {
+                                const usedLettersMap = new Map();
+                                for (const userId in updatedLobby.gameData.usedLetters) {
+                                    usedLettersMap.set(userId, new Set(updatedLobby.gameData.usedLetters[userId] || []));
+                                }
+                                updatedLobby.gameData.usedLetters = usedLettersMap;
+                            }
+
                             // Get the current player's personal used letters set
                             const playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
                             // Add each letter of the played word to their personal set
@@ -720,7 +729,7 @@ module.exports = {
                     content: '❌ Only the owner can change settings.',
                     ephemeral: true
                 });
-                
+
                 const value = i.values[0];
 
                 if (value === 'english' || value === 'french') {
