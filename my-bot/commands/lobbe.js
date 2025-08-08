@@ -17,9 +17,6 @@ let lobbies = {};
 
 /**
  * Loads lobbies from the JSON file, converting arrays back to Sets and Maps.
- */
-/**
- * Loads lobbies from the JSON file, converting arrays back to Sets and Maps.
  * Includes defensive checks to prevent crashes if game data properties are missing.
  */
 function loadLobbies() {
@@ -57,8 +54,6 @@ function loadLobbies() {
     }
 }
 
-
-
 loadLobbies();
 
 /**
@@ -70,8 +65,7 @@ function saveLobbies() {
         lobbiesToSave[guildId] = {};
         for (const gameId in lobbies[guildId]) {
             const lobby = lobbies[guildId][gameId];
-            const newLobby = { ...lobby
-            };
+            const newLobby = { ...lobby };
 
             // Convert Sets to arrays for saving
             if (newLobby.gameData) {
@@ -91,8 +85,10 @@ function saveLobbies() {
                     newLobby.gameData.usedLetters = usedLettersObject;
                 }
 
-                // Remove timeout object as it can't be serialized
+                // Remove timeout object and other non-serializable properties
                 delete newLobby.gameData.timeout;
+                delete newLobby.gameData.processingTurn;
+                delete newLobby.gameData.messageCollector;
             }
             lobbiesToSave[guildId][gameId] = newLobby;
         }
@@ -224,12 +220,14 @@ function lobbyComponents() {
         .setCustomId('settings_menu')
         .setPlaceholder('⚙️ Game Settings')
         .addOptions([
-            new StringSelectMenuOptionBuilder().setLabel('Language: English').setValue('english'),
-            new StringSelectMenuOptionBuilder().setLabel('Language: French').setValue('french'),
+            new StringSelectMenuOptionBuilder().setLabel('Language: English').setValue('english').setEmoji('🇬🇧'),
+            new StringSelectMenuOptionBuilder().setLabel('Language: French').setValue('french').setEmoji('🇲🇫'),
+            new StringSelectMenuOptionBuilder().setLabel('Lives: 1').setValue('lives_1'),
             new StringSelectMenuOptionBuilder().setLabel('Lives: 3').setValue('lives_3'),
             new StringSelectMenuOptionBuilder().setLabel('Lives: 5').setValue('lives_5'),
             new StringSelectMenuOptionBuilder().setLabel('Turn Time: 10s').setValue('time_10'),
-            new StringSelectMenuOptionBuilder().setLabel('Turn Time: 15s').setValue('time_15')
+            new StringSelectMenuOptionBuilder().setLabel('Turn Time: 15s').setValue('time_15'),
+            new StringSelectMenuOptionBuilder().setLabel('Turn Time: 20s').setValue('time_20')
         ]);
 
     const row1 = new ActionRowBuilder().addComponents(settingsMenu);
@@ -247,6 +245,807 @@ function lobbyComponents() {
     );
 
     return [row1, row2, row3];
+}
+
+/**
+ * Safely clears any existing timeout for a lobby
+ */
+function clearLobbyTimeout(lobby) {
+    if (lobby.gameData && lobby.gameData.timeout) {
+        clearTimeout(lobby.gameData.timeout);
+        lobby.gameData.timeout = null;
+    }
+}
+
+/**
+ * Safely stops any existing message collector for a lobby
+ */
+function stopMessageCollector(lobby) {
+    if (lobby.gameData && lobby.gameData.messageCollector) {
+        try {
+            lobby.gameData.messageCollector.stop('manual_stop');
+        } catch (err) {
+            // Collector might already be stopped
+        }
+        lobby.gameData.messageCollector = null;
+    }
+}
+
+/**
+ * Creates and manages a timeout for a player's turn
+ */
+function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, nextTurnCallback) {
+    // Clear any existing timeout first
+    clearLobbyTimeout(lobby);
+    
+    const currentPlayerId = playersInGame[lobby.gameData.currentPlayerIndex];
+    
+    lobby.gameData.timeout = setTimeout(async () => {
+        try {
+            // Prevent race conditions
+            if (lobby.gameData.processingTurn) return;
+            lobby.gameData.processingTurn = true;
+            
+            // Stop message collector if it exists
+            stopMessageCollector(lobby);
+            
+            // Handle timeout
+            lobby.gameData.lives[currentPlayerId]--;
+            lobby.gameData.logs.push({
+                player: currentPlayerId,
+                word: '❌ Timeout',
+                seq: lobby.gameData.currentSeq
+            });
+            
+            if (lobby.gameData.logs.length > 5) {
+                lobby.gameData.logs.splice(0, lobby.gameData.logs.length - 5);
+            }
+            
+            // Generate new sequence avoiding recent ones after timeout
+            let newSequence;
+            let attempts = 0;
+            do {
+                newSequence = getRandomSequence(lobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
+                attempts++;
+            } while (lobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
+            
+            lobby.gameData.currentSeq = newSequence;
+            
+            // Track sequence history to avoid repetition (keep last 5 sequences)
+            lobby.gameData.sequenceHistory.push(newSequence);
+            if (lobby.gameData.sequenceHistory.length > 5) {
+                lobby.gameData.sequenceHistory.shift();
+            }
+            
+            // Clear timeout reference and processing flag
+            lobby.gameData.timeout = null;
+            lobby.gameData.processingTurn = false;
+            saveLobbies();
+
+            // Check for game end
+            const alivePlayers = Object.values(lobby.gameData.lives).filter(lives => lives > 0).length;
+            if (alivePlayers <= 1) {
+                const winnerId = Object.keys(lobby.gameData.lives).find(id => lobby.gameData.lives[id] > 0);
+                await endGameCallback(`🎉 Game over! The winner is <@${winnerId}>`);
+                return;
+            }
+
+            // Move to next player
+            lobby.gameData.currentPlayerIndex = (lobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
+            while (lobby.gameData.lives[playersInGame[lobby.gameData.currentPlayerIndex]] <= 0) {
+                lobby.gameData.currentPlayerIndex = (lobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
+            }
+            
+            await nextTurnCallback();
+        } catch (error) {
+            console.error('Error in timeout handler:', error);
+            lobby.gameData.processingTurn = false;
+        }
+    }, lobby.settings.turnTime * 1000);
+}
+
+/**
+ * Returns players to the lobby interface after a game ends
+ */
+async function returnToLobby(interaction, lobby, guildId, gameId) {
+    try {
+        await interaction.editReply({
+            content: null,
+            embeds: [generateLobbyEmbed(lobby)],
+            components: lobbyComponents()
+        });
+
+        const message = await interaction.fetchReply();
+
+        // Restart lobby collectors
+        const collector = message.createMessageComponentCollector({
+            componentType: ComponentType.Button,
+            time: 300000 // 5 minutes for lobby activity
+        });
+
+        const selectCollector = message.createMessageComponentCollector({
+            componentType: ComponentType.StringSelect,
+            time: 300000
+        });
+
+        // Handle button interactions (reuse the lobby logic)
+        await handleLobbyButtonInteractions(collector, interaction, lobby, guildId, gameId);
+        
+        // Handle select menu interactions
+        await handleLobbySelectInteractions(selectCollector, interaction, lobby);
+
+    } catch (err) {
+        console.error('Failed to return to lobby:', err);
+        // Fallback: close the lobby if we can't return to it
+        delete lobbies[guildId][gameId];
+        saveLobbies();
+    }
+}
+
+/**
+ * Handles lobby button interactions (extracted for reuse)
+ */
+async function handleLobbyButtonInteractions(collector, interaction, initialLobby, guildId, gameId) {
+    collector.on('collect', async i => {
+        const lobby = lobbies[guildId][gameId];
+        if (!lobby) return i.reply({
+            content: '❌ This lobby no longer exists.',
+            ephemeral: true
+        });
+
+        lobby.lastActivity = Date.now();
+
+        if (i.customId === 'join_game') {
+            if (lobby.players.includes(i.user.id)) return i.reply({
+                content: '❌ You are already in the game.',
+                ephemeral: true
+            });
+            if (lobby.players.length >= lobby.maxPlayers) return i.reply({
+                content: '❌ Lobby is full.',
+                ephemeral: true
+            });
+            if (lobby.banned.includes(i.user.id)) return i.reply({
+                content: '❌ You are banned from this lobby.',
+                ephemeral: true
+            });
+
+            lobby.players.push(i.user.id);
+            saveLobbies();
+            await i.deferUpdate();
+            await interaction.editReply({
+                embeds: [generateLobbyEmbed(lobby)],
+                components: lobbyComponents()
+            });
+            return;
+        }
+
+        if (i.customId === 'leave_game') {
+            if (!lobby.players.includes(i.user.id)) return i.reply({
+                content: '❌ You are not in the game.',
+                ephemeral: true
+            });
+            if (lobby.owner === i.user.id) return i.reply({
+                content: '❌ The owner cannot leave. Use Cancel Room instead.',
+                ephemeral: true
+            });
+
+            lobby.players = lobby.players.filter(p => p !== i.user.id);
+            saveLobbies();
+            await i.deferUpdate();
+            await interaction.editReply({
+                embeds: [generateLobbyEmbed(lobby)],
+                components: lobbyComponents()
+            });
+            return;
+        }
+
+        if (i.customId === 'transfer_owner') {
+            if (i.user.id !== lobby.owner) return i.reply({
+                content: '❌ Only the owner can transfer ownership.',
+                ephemeral: true
+            });
+            if (lobby.players.length < 2) return i.reply({
+                content: '❌ No other players to transfer ownership to.',
+                ephemeral: true
+            });
+
+            const userMenu = new UserSelectMenuBuilder()
+                .setCustomId('select_new_owner')
+                .setPlaceholder('Select a new owner')
+                .setMaxValues(1)
+                .setMinValues(1);
+
+            const row = new ActionRowBuilder().addComponents(userMenu);
+
+            await i.deferUpdate();
+
+            const followUpMessage = await i.followUp({
+                content: '👑 Select a player to become the new owner:',
+                components: [row],
+                ephemeral: true
+            });
+
+            const newOwnerCollector = followUpMessage.createMessageComponentCollector({
+                componentType: ComponentType.UserSelect,
+                time: 60000,
+                filter: (interaction) => interaction.user.id === i.user.id,
+                max: 1
+            });
+
+            newOwnerCollector.on('collect', async menuInteraction => {
+                const newOwnerId = menuInteraction.values[0];
+                const updatedLobby = lobbies[guildId][gameId];
+
+                if (!updatedLobby || !updatedLobby.players.includes(newOwnerId)) {
+                    return menuInteraction.update({
+                        content: '❌ Selected user is not in the lobby or lobby no longer exists.',
+                        components: []
+                    });
+                }
+
+                updatedLobby.owner = newOwnerId;
+                saveLobbies();
+
+                await menuInteraction.update({
+                    content: `✅ Ownership transferred to <@${newOwnerId}>`,
+                    components: []
+                });
+
+                await interaction.editReply({
+                    embeds: [generateLobbyEmbed(updatedLobby)],
+                    components: lobbyComponents(),
+                });
+            });
+
+            newOwnerCollector.on('end', (collected, reason) => {
+                if (reason === 'time') {
+                    i.editReply({
+                        content: '❌ Transfer ownership timed out.',
+                        components: []
+                    });
+                }
+            });
+
+            return;
+        }
+
+        if (i.customId === 'ban_player') {
+            if (i.user.id !== lobby.owner) return i.reply({
+                content: '❌ Only the owner can ban players.',
+                ephemeral: true
+            });
+            if (lobby.players.length < 2) return i.reply({
+                content: '❌ No players to ban.',
+                ephemeral: true
+            });
+
+            const userMenu = new UserSelectMenuBuilder()
+                .setCustomId('select_ban_player')
+                .setPlaceholder('Select a player to ban')
+                .setMaxValues(1)
+                .setMinValues(1);
+
+            const row = new ActionRowBuilder().addComponents(userMenu);
+
+            await i.deferUpdate();
+
+            const followUpMessage = await i.followUp({
+                content: '⛔ Select a player to ban:',
+                components: [row],
+                ephemeral: true
+            });
+
+            const banPlayerCollector = followUpMessage.createMessageComponentCollector({
+                componentType: ComponentType.UserSelect,
+                time: 60000,
+                filter: (interaction) => interaction.user.id === i.user.id,
+                max: 1
+            });
+
+            banPlayerCollector.on('collect', async menuInteraction => {
+                const banUserId = menuInteraction.values[0];
+                const updatedLobby = lobbies[guildId][gameId];
+
+                if (!updatedLobby || !updatedLobby.players.includes(banUserId)) {
+                    return menuInteraction.update({
+                        content: '❌ Selected user is not in the lobby or lobby no longer exists.',
+                        components: []
+                    });
+                }
+
+                if (banUserId === updatedLobby.owner) {
+                    return menuInteraction.update({
+                        content: '❌ You cannot ban the owner.',
+                        components: []
+                    });
+                }
+
+                updatedLobby.players = updatedLobby.players.filter(id => id !== banUserId);
+                updatedLobby.banned.push(banUserId);
+                saveLobbies();
+
+                await menuInteraction.update({
+                    content: `⛔ <@${banUserId}> has been banned and removed from the lobby.`,
+                    components: []
+                });
+
+                await interaction.editReply({
+                    embeds: [generateLobbyEmbed(updatedLobby)],
+                    components: lobbyComponents(),
+                });
+            });
+
+            banPlayerCollector.on('end', (collected, reason) => {
+                if (reason === 'time') {
+                    i.editReply({
+                        content: '❌ Ban player selection timed out.',
+                        components: []
+                    });
+                }
+            });
+            return;
+        }
+
+        if (i.customId === 'start_game') {
+            return await startGame(i, interaction, lobby, guildId, gameId);
+        }
+
+        if (i.customId === 'cancel_room') {
+            if (i.user.id !== lobby.owner) return i.reply({
+                content: '❌ Only the owner can cancel the room.',
+                ephemeral: true
+            });
+
+            delete lobbies[guildId][gameId];
+            saveLobbies();
+
+            await i.deferUpdate();
+            await interaction.editReply({
+                content: '🗑️ Lobby has been canceled.',
+                embeds: [],
+                components: []
+            });
+            collector.stop('canceled');
+            return;
+        }
+    });
+}
+
+/**
+ * Handles lobby select menu interactions (extracted for reuse)
+ */
+async function handleLobbySelectInteractions(selectCollector, interaction, initialLobby) {
+    selectCollector.on('collect', async i => {
+        const guildId = interaction.guild.id;
+        const gameId = initialLobby.gameId;
+        const lobby = lobbies[guildId][gameId];
+        
+        if (!lobby) return i.reply({
+            content: '❌ This lobby no longer exists.',
+            ephemeral: true
+        });
+
+        lobby.lastActivity = Date.now();
+
+        if (i.customId === 'settings_menu') {
+            if (i.user.id !== lobby.owner) return i.reply({
+                content: '❌ Only the owner can change settings.',
+                ephemeral: true
+            });
+
+            const value = i.values[0];
+
+            if (value === 'english' || value === 'french') {
+                lobby.settings.language = value;
+            } else if (value.startsWith('lives_')) {
+                lobby.settings.lives = parseInt(value.split('_')[1]);
+            } else if (value.startsWith('time_')) {
+                lobby.settings.turnTime = parseInt(value.split('_')[1]);
+            }
+
+            saveLobbies();
+            await i.deferUpdate();
+            await interaction.editReply({
+                embeds: [generateLobbyEmbed(lobby)],
+                components: lobbyComponents()
+            });
+            return;
+        }
+    });
+}
+
+/**
+ * Handles the start game logic (extracted for reuse)
+ */
+async function startGame(i, interaction, lobby, guildId, gameId) {
+    if (i.user.id !== lobby.owner) return i.reply({
+        content: '❌ Only the owner can start the game.',
+        ephemeral: true
+    });
+    if (lobby.players.length < 2) return i.reply({
+        content: '❌ At least 2 players needed to start the game.',
+        ephemeral: true
+    });
+
+    await i.deferUpdate();
+
+    const dictionary = loadDictionary(lobby.settings.language);
+    const playersInGame = [...lobby.players];
+    const initialLives = {};
+    const initialUsedLetters = new Map();
+    playersInGame.forEach(id => {
+        initialLives[id] = lobby.settings.lives;
+        initialUsedLetters.set(id, new Set());
+    });
+
+    const initialSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
+    const currentLobby = lobbies[guildId][gameId];
+    currentLobby.gameData = {
+        dictionary: dictionary,
+        usedWords: new Set(),
+        usedLetters: initialUsedLetters,
+        logs: [],
+        lives: initialLives,
+        currentSeq: initialSeq,
+        sequenceHistory: [initialSeq],
+        currentPlayerIndex: 0,
+        gameStartTime: Date.now(),
+        timeout: null,
+        messageCollector: null,
+        processingTurn: false,
+        isGameActive: true,
+        wordsPlayedCount: 0,
+    };
+    saveLobbies();
+
+    const stopRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('stop_game').setLabel('Stop Game').setStyle(ButtonStyle.Danger).setEmoji('🛑')
+    );
+
+    const gameMessage = await interaction.editReply({
+        content: `🎮 Game started! First turn: <@${playersInGame[0]}>. You have **${lobby.settings.turnTime}s** to type a word containing: \`${currentLobby.gameData.currentSeq}\``,
+        embeds: [createGameEmbed(currentLobby, playersInGame[0])],
+        components: [stopRow],
+    });
+
+    const endGame = async (reason) => {
+        const currentLobby = lobbies[guildId][gameId];
+        if (!currentLobby || !currentLobby.gameData) return;
+
+        // Clean up all game resources
+        clearLobbyTimeout(currentLobby);
+        stopMessageCollector(currentLobby);
+        currentLobby.gameData.isGameActive = false;
+        currentLobby.gameData.processingTurn = false;
+
+        // Reset lobby to pre-game state but keep players and settings
+        const finalGameData = { ...currentLobby.gameData };
+        currentLobby.gameData = null;
+        currentLobby.lastActivity = Date.now();
+        saveLobbies();
+
+        // Create "Back to Lobby" button
+        const backToLobbyRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('back_to_lobby')
+                .setLabel('Back to Lobby')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('🏠'),
+            new ButtonBuilder()
+                .setCustomId('close_lobby')
+                .setLabel('Close Lobby')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🗑️')
+        );
+
+        try {
+            const gameEndMessage = await interaction.editReply({
+                content: reason,
+                embeds: [createGameEmbed({ gameId: currentLobby.gameId, gameData: finalGameData }, playersInGame[finalGameData.currentPlayerIndex])],
+                components: [backToLobbyRow],
+            });
+
+            // Create collector for post-game buttons
+            const postGameCollector = gameEndMessage.createMessageComponentCollector({
+                componentType: ComponentType.Button,
+                time: 300000 // 5 minutes to decide
+            });
+
+            postGameCollector.on('collect', async postBtn => {
+                const updatedLobby = lobbies[guildId][gameId];
+                if (!updatedLobby) {
+                    return postBtn.reply({
+                        content: '❌ This lobby no longer exists.',
+                        ephemeral: true
+                    });
+                }
+
+                if (postBtn.customId === 'back_to_lobby') {
+                    if (!updatedLobby.players.includes(postBtn.user.id)) {
+                        return postBtn.reply({
+                            content: '❌ You are not in this lobby.',
+                            ephemeral: true
+                        });
+                    }
+
+                    await postBtn.deferUpdate();
+                    postGameCollector.stop('back_to_lobby');
+
+                    // Return to lobby interface
+                    await returnToLobby(interaction, updatedLobby, guildId, gameId);
+                    
+                } else if (postBtn.customId === 'close_lobby') {
+                    if (postBtn.user.id !== updatedLobby.owner) {
+                        return postBtn.reply({
+                            content: '❌ Only the owner can close the lobby.',
+                            ephemeral: true
+                        });
+                    }
+
+                    await postBtn.deferUpdate();
+                    postGameCollector.stop('closed');
+
+                    // Delete lobby completely
+                    delete lobbies[guildId][gameId];
+                    saveLobbies();
+
+                    await interaction.editReply({
+                        content: '🗑️ Lobby has been closed.',
+                        embeds: [],
+                        components: []
+                    });
+                }
+            });
+
+            postGameCollector.on('end', (collected, reason) => {
+                if (reason === 'time') {
+                    // Auto-close after timeout
+                    const lobbyStillExists = lobbies[guildId] && lobbies[guildId][gameId];
+                    if (lobbyStillExists) {
+                        delete lobbies[guildId][gameId];
+                        saveLobbies();
+                    }
+                    
+                    interaction.editReply({
+                        content: '🕐 Lobby closed due to inactivity.',
+                        embeds: [],
+                        components: []
+                    }).catch(() => {});
+                }
+            });
+
+        } catch (err) {
+            console.error('Failed to edit message on game end:', err);
+            // Fallback: delete lobby if message editing fails
+            delete lobbies[guildId][gameId];
+            saveLobbies();
+        }
+    };
+
+    const updateGameMessage = async () => {
+        const updatedLobby = lobbies[guildId][gameId];
+        if (!updatedLobby || !updatedLobby.gameData || !updatedLobby.gameData.isGameActive) return;
+
+        const currentPlayerId = playersInGame[updatedLobby.gameData.currentPlayerIndex];
+        const turnMessage = `⏳ Your turn, <@${currentPlayerId}>! You have **${updatedLobby.settings.turnTime}s** to type a word containing: \`${updatedLobby.gameData.currentSeq}\``;
+
+        try {
+            await gameMessage.edit({
+                content: turnMessage,
+                embeds: [createGameEmbed(updatedLobby, currentPlayerId)],
+                components: [stopRow],
+            });
+        } catch (err) {
+            console.error('Failed to update game message:', err);
+        }
+    };
+
+    const nextTurn = async () => {
+        const currentLobby = lobbies[guildId][gameId];
+        if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
+
+        // Clear any existing timeout and message collector
+        clearLobbyTimeout(currentLobby);
+        stopMessageCollector(currentLobby);
+        
+        // Reset processing flag
+        currentLobby.gameData.processingTurn = false;
+        
+        await updateGameMessage();
+
+        const currentPlayerId = playersInGame[currentLobby.gameData.currentPlayerIndex];
+
+        // Create message collector for this turn
+        const msgCollector = interaction.channel.createMessageCollector({
+            filter: m => m.author.id === currentPlayerId,
+            time: currentLobby.settings.turnTime * 1000
+        });
+
+        // Store collector reference for cleanup
+        currentLobby.gameData.messageCollector = msgCollector;
+
+        // Set up timeout
+        setPlayerTimeout(currentLobby, interaction, playersInGame, endGame, nextTurn);
+
+        msgCollector.on('collect', async msg => {
+            // Prevent race conditions
+            if (currentLobby.gameData.processingTurn) return;
+            
+            const content = msg.content.toLowerCase().trim();
+            await msg.delete().catch(() => {});
+            
+            const updatedLobby = lobbies[guildId][gameId];
+            if (!updatedLobby || !updatedLobby.gameData || !updatedLobby.gameData.isGameActive) return;
+
+            // Ensure dictionary is a Set
+            if (!(updatedLobby.gameData.dictionary instanceof Set)) {
+                updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
+            }
+
+            // Ensure usedWords is a Set
+            if (!(updatedLobby.gameData.usedWords instanceof Set)) {
+                updatedLobby.gameData.usedWords = new Set(updatedLobby.gameData.usedWords || []);
+            }
+
+            const isValidWord = updatedLobby.gameData.dictionary.has(content);
+            const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
+            const isWordUsed = updatedLobby.gameData.usedWords.has(content);
+
+            if (isValidWord && containsSequence && !isWordUsed) {
+                // Valid word - set processing flag and stop collector/timeout
+                updatedLobby.gameData.processingTurn = true;
+                msgCollector.stop('valid_word');
+                clearLobbyTimeout(updatedLobby);
+
+                updatedLobby.gameData.usedWords.add(content);
+
+                // Ensure usedLetters is a Map
+                if (!(updatedLobby.gameData.usedLetters instanceof Map)) {
+                    const usedLettersMap = new Map();
+                    for (const userId in updatedLobby.gameData.usedLetters) {
+                        usedLettersMap.set(userId, new Set(updatedLobby.gameData.usedLetters[userId] || []));
+                    }
+                    updatedLobby.gameData.usedLetters = usedLettersMap;
+                }
+
+                // Get the current player's personal used letters set
+                let playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
+                if (!playerUsedLetters) {
+                    playerUsedLetters = new Set();
+                    updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
+                }
+                
+                // Add each letter of the played word to their personal set (only a-v)
+                for (const letter of content) {
+                    if (letter >= 'a' && letter <= 'v') {
+                        playerUsedLetters.add(letter);
+                    }
+                }
+                
+                // Ensure the updated set is saved back to the map
+                updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
+
+                // Initialize wordsPlayedCount if it doesn't exist
+                if (!updatedLobby.gameData.wordsPlayedCount) {
+                    updatedLobby.gameData.wordsPlayedCount = 0;
+                }
+                updatedLobby.gameData.wordsPlayedCount++;
+
+                updatedLobby.gameData.logs.push({
+                    player: currentPlayerId,
+                    word: content,
+                    seq: updatedLobby.gameData.currentSeq
+                });
+                if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+
+                // Check if this player has now completed their alphabet (a-v = 22 letters)
+                if (playerUsedLetters.size >= 22) {
+                    updatedLobby.gameData.lives[currentPlayerId]++;
+                    updatedLobby.gameData.logs.push({
+                        player: 'System',
+                        word: `<@${currentPlayerId}> completed alphabet! +1 life`,
+                        seq: '—'
+                    });
+                    if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+                    // Reset the player's alphabet to start over
+                    updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
+                }
+
+                // Generate new sequence avoiding recent ones
+                let newSequence;
+                let attempts = 0;
+                do {
+                    newSequence = getRandomSequence(updatedLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
+                    attempts++;
+                } while (updatedLobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
+                
+                updatedLobby.gameData.currentSeq = newSequence;
+                
+                // Track sequence history to avoid repetition (keep last 5 sequences)
+                updatedLobby.gameData.sequenceHistory.push(newSequence);
+                if (updatedLobby.gameData.sequenceHistory.length > 5) {
+                    updatedLobby.gameData.sequenceHistory.shift();
+                }
+                
+                // Move to next player
+                updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
+                while (updatedLobby.gameData.lives[playersInGame[updatedLobby.gameData.currentPlayerIndex]] <= 0) {
+                    updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
+                }
+
+                // Reset processing flag
+                updatedLobby.gameData.processingTurn = false;
+                saveLobbies();
+                await nextTurn();
+            } else {
+                // Invalid word - log it and reset timer for same player
+                let reason;
+                if (!isValidWord) {
+                    reason = 'Invalid word';
+                } else if (!containsSequence) {
+                    reason = 'No sequence';
+                } else if (isWordUsed) {
+                    reason = 'Already used';
+                }
+
+                updatedLobby.gameData.logs.push({
+                    player: currentPlayerId,
+                    word: `❌ ${content}`,
+                    seq: updatedLobby.gameData.currentSeq
+                });
+                
+                if (updatedLobby.gameData.logs.length > 5) {
+                    updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+                }
+                
+                saveLobbies();
+                await updateGameMessage();
+                
+                // Send ephemeral feedback to player
+                try {
+                    const channel = interaction.channel;
+                    const tempMsg = await channel.send(`<@${currentPlayerId}> ❌ ${reason}. Try again.`);
+                    setTimeout(() => tempMsg.delete().catch(() => {}), 3000);
+                } catch (err) {
+                    console.error('Failed to send invalid word message:', err);
+                }
+
+                // Reset the timer for the same player (don't advance turn)
+                clearLobbyTimeout(updatedLobby);
+                setPlayerTimeout(updatedLobby, interaction, playersInGame, endGame, nextTurn);
+            }
+        });
+
+        msgCollector.on('end', (collected, reason) => {
+            // Only handle timeout if it wasn't stopped by valid word or manual stop
+            if (reason === 'time' && currentLobby.gameData && currentLobby.gameData.isGameActive) {
+                // Timeout will be handled by the setTimeout callback
+            }
+        });
+    };
+
+    // Set up stop game button collector
+    const btnCollector = gameMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 10 * 60 * 1000,
+    });
+
+    btnCollector.on('collect', async btn => {
+        if (btn.customId === 'stop_game') {
+            if (btn.user.id !== lobby.owner) {
+                return btn.reply({
+                    content: '❌ Only the owner can stop the game.',
+                    ephemeral: true
+                });
+            }
+            await btn.deferUpdate();
+            await endGame('🛑 Game stopped by user.');
+            btnCollector.stop('stopped');
+        }
+    });
+
+    // Start the first turn
+    await nextTurn();
 }
 
 module.exports = {
@@ -296,575 +1095,41 @@ module.exports = {
 
         const collector = message.createMessageComponentCollector({
             componentType: ComponentType.Button,
-            time: 120000
-        });
-
-        collector.on('collect', async i => {
-            const lobby = lobbies[guildId][gameId];
-            if (!lobby) return i.reply({
-                content: '❌ This lobby no longer exists.',
-                ephemeral: true
-            });
-
-            lobby.lastActivity = Date.now();
-
-            if (i.customId === 'join_game') {
-                if (lobby.players.includes(i.user.id)) return i.reply({
-                    content: '❌ You are already in the game.',
-                    ephemeral: true
-                });
-                if (lobby.players.length >= lobby.maxPlayers) return i.reply({
-                    content: '❌ Lobby is full.',
-                });
-                if (lobby.banned.includes(i.user.id)) return i.reply({
-                    content: '❌ You are banned from this lobby.',
-                    ephemeral: true
-                });
-
-                lobby.players.push(i.user.id);
-                saveLobbies();
-                await i.deferUpdate();
-                await interaction.editReply({
-                    embeds: [generateLobbyEmbed(lobby)],
-                    components: lobbyComponents()
-                });
-                return;
-            }
-
-            if (i.customId === 'leave_game') {
-                if (!lobby.players.includes(i.user.id)) return i.reply({
-                    content: '❌ You are not in the game.',
-                    ephemeral: true
-                });
-                if (lobby.owner === i.user.id) return i.reply({
-                    content: '❌ The owner cannot leave. Use Cancel Room instead.',
-                    ephemeral: true
-                });
-
-                lobby.players = lobby.players.filter(p => p !== i.user.id);
-                saveLobbies();
-                await i.deferUpdate();
-                await interaction.editReply({
-                    embeds: [generateLobbyEmbed(lobby)],
-                    components: lobbyComponents()
-                });
-                return;
-            }
-
-            if (i.customId === 'transfer_owner') {
-                if (i.user.id !== lobby.owner) return i.reply({
-                    content: '❌ Only the owner can transfer ownership.',
-                    ephemeral: true
-                });
-                if (lobby.players.length < 2) return i.reply({
-                    content: '❌ No other players to transfer ownership to.',
-                    ephemeral: true
-                });
-
-                const userMenu = new UserSelectMenuBuilder()
-                    .setCustomId('select_new_owner')
-                    .setPlaceholder('Select a new owner')
-                    .setMaxValues(1)
-                    .setMinValues(1);
-
-                const row = new ActionRowBuilder().addComponents(userMenu);
-
-                await i.deferUpdate();
-
-                const followUpMessage = await i.followUp({
-                    content: '👑 Select a player to become the new owner:',
-                    components: [row],
-                    ephemeral: true
-                });
-
-                const newOwnerCollector = followUpMessage.createMessageComponentCollector({
-                    componentType: ComponentType.UserSelect,
-                    time: 60000,
-                    filter: (interaction) => interaction.user.id === i.user.id,
-                    max: 1
-                });
-
-                newOwnerCollector.on('collect', async menuInteraction => {
-                    const newOwnerId = menuInteraction.values[0];
-                    const updatedLobby = lobbies[guildId][gameId];
-
-                    if (!updatedLobby || !updatedLobby.players.includes(newOwnerId)) {
-                        return menuInteraction.update({
-                            content: '❌ Selected user is not in the lobby or lobby no longer exists.',
-                            components: []
-                        });
-                    }
-
-                    updatedLobby.owner = newOwnerId;
-                    saveLobbies();
-
-                    await menuInteraction.update({
-                        content: `✅ Ownership transferred to <@${newOwnerId}>`,
-                        components: []
-                    });
-
-                    await interaction.editReply({
-                        embeds: [generateLobbyEmbed(updatedLobby)],
-                        components: lobbyComponents(),
-                    });
-                });
-
-                newOwnerCollector.on('end', (collected, reason) => {
-                    if (reason === 'time') {
-                        i.editReply({
-                            content: '❌ Transfer ownership timed out.',
-                            components: []
-                        });
-                    }
-                });
-
-                return;
-            }
-
-            if (i.customId === 'ban_player') {
-                if (i.user.id !== lobby.owner) return i.reply({
-                    content: '❌ Only the owner can ban players.',
-                    ephemeral: true
-                });
-                if (lobby.players.length < 2) return i.reply({
-                    content: '❌ No players to ban.',
-                    ephemeral: true
-                });
-
-                const userMenu = new UserSelectMenuBuilder()
-                    .setCustomId('select_ban_player')
-                    .setPlaceholder('Select a player to ban')
-                    .setMaxValues(1)
-                    .setMinValues(1);
-
-                const row = new ActionRowBuilder().addComponents(userMenu);
-
-                await i.deferUpdate();
-
-                const followUpMessage = await i.followUp({
-                    content: '⛔ Select a player to ban:',
-                    components: [row],
-                    ephemeral: true
-                });
-
-                const banPlayerCollector = followUpMessage.createMessageComponentCollector({
-                    componentType: ComponentType.UserSelect,
-                    time: 60000,
-                    filter: (interaction) => interaction.user.id === i.user.id,
-                    max: 1
-                });
-
-                banPlayerCollector.on('collect', async menuInteraction => {
-                    const banUserId = menuInteraction.values[0];
-                    const updatedLobby = lobbies[guildId][gameId];
-
-                    if (!updatedLobby || !updatedLobby.players.includes(banUserId)) {
-                        return menuInteraction.update({
-                            content: '❌ Selected user is not in the lobby or lobby no longer exists.',
-                            components: []
-                        });
-                    }
-
-                    if (banUserId === updatedLobby.owner) {
-                        return menuInteraction.update({
-                            content: '❌ You cannot ban the owner.',
-                            components: []
-                        });
-                    }
-
-                    updatedLobby.players = updatedLobby.players.filter(id => id !== banUserId);
-                    updatedLobby.banned.push(banUserId);
-                    saveLobbies();
-
-                    await menuInteraction.update({
-                        content: `⛔ <@${banUserId}> has been banned and removed from the lobby.`,
-                        components: []
-                    });
-
-                    await interaction.editReply({
-                        embeds: [generateLobbyEmbed(updatedLobby)],
-                        components: lobbyComponents(),
-                    });
-                });
-
-                banPlayerCollector.on('end', (collected, reason) => {
-                    if (reason === 'time') {
-                        i.editReply({
-                            content: '❌ Ban player selection timed out.',
-                            components: []
-                        });
-                    }
-                });
-                return;
-            }
-
-            if (i.customId === 'start_game') {
-                if (i.user.id !== lobby.owner) return i.reply({
-                    content: '❌ Only the owner can start the game.',
-                    ephemeral: true
-                });
-                if (lobby.players.length < 2) return i.reply({
-                    content: '❌ At least 2 players needed to start the game.',
-                    ephemeral: true
-                });
-
-                await i.deferUpdate();
-
-                const dictionary = loadDictionary(lobby.settings.language);
-                const playersInGame = [...lobby.players];
-                const initialLives = {};
-                const initialUsedLetters = new Map();
-                playersInGame.forEach(id => {
-                    initialLives[id] = lobby.settings.lives;
-                    initialUsedLetters.set(id, new Set());
-                });
-
-                const initialSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
-                const currentLobby = lobbies[guildId][gameId];
-                currentLobby.gameData = {
-                    dictionary: dictionary,
-                    usedWords: new Set(),
-                    usedLetters: initialUsedLetters,
-                    logs: [],
-                    lives: initialLives,
-                    currentSeq: initialSeq,
-                    sequenceHistory: [initialSeq],
-                    currentPlayerIndex: 0,
-                    gameStartTime: Date.now(),
-                    timeout: null,
-                    isGameActive: true,
-                    wordsPlayedCount: 0,
-                };
-                saveLobbies();
-
-                collector.stop('started');
-
-                const stopRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('stop_game').setLabel('Stop Game').setStyle(ButtonStyle.Danger).setEmoji('🛑')
-                );
-
-                const gameMessage = await interaction.editReply({
-                    content: `🎮 Game started! First turn: <@${playersInGame[0]}>. You have **${lobby.settings.turnTime}s** to type a word containing: \`${currentLobby.gameData.currentSeq}\``,
-                    embeds: [createGameEmbed(currentLobby, playersInGame[0])],
-                    components: [stopRow],
-                });
-
-                async function updateGameMessage() {
-                    const updatedLobby = lobbies[guildId][gameId];
-                    if (!updatedLobby || !updatedLobby.gameData || !updatedLobby.gameData.isGameActive) return;
-
-                    const currentPlayerId = playersInGame[updatedLobby.gameData.currentPlayerIndex];
-                    const turnMessage = `⏳ Your turn, <@${currentPlayerId}>! You have **${updatedLobby.settings.turnTime}s** to type a word containing: \`${updatedLobby.gameData.currentSeq}\``;
-
-                    try {
-                        await gameMessage.edit({
-                            content: turnMessage,
-                            embeds: [createGameEmbed(updatedLobby, currentPlayerId)],
-                            components: [stopRow],
-                        });
-                    } catch (err) {
-                        console.error('Failed to update game message:', err);
-                    }
-                }
-
-                const endGame = async (reason) => {
-                    const currentLobby = lobbies[guildId][gameId];
-                    if (!currentLobby || !currentLobby.gameData) return;
-
-                    clearTimeout(currentLobby.gameData.timeout);
-                    currentLobby.gameData.isGameActive = false;
-                    saveLobbies();
-
-                    await interaction.editReply({
-                        content: reason,
-                        embeds: [createGameEmbed(currentLobby, playersInGame[currentLobby.gameData.currentPlayerIndex])],
-                        components: [],
-                    }).catch(() => {});
-
-                    delete lobbies[guildId][gameId];
-                    saveLobbies();
-                };
-
-                const nextTurn = async () => {
-                    const currentLobby = lobbies[guildId][gameId];
-                    if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
-
-                    // Clear any existing timeout first
-                    clearTimeout(currentLobby.gameData.timeout);
-                    currentLobby.gameData.timeout = null;
-                    
-                    await updateGameMessage();
-
-                    const currentPlayerId = playersInGame[currentLobby.gameData.currentPlayerIndex];
-
-                    const msgCollector = interaction.channel.createMessageCollector({
-                        filter: m => m.author.id === currentPlayerId,
-                        time: currentLobby.settings.turnTime * 1000
-                    });
-
-                    currentLobby.gameData.timeout = setTimeout(async () => {
-                        msgCollector.stop('timeout');
-                        currentLobby.gameData.lives[currentPlayerId]--;
-                        currentLobby.gameData.logs.push({
-                            player: currentPlayerId,
-                            word: '❌ Timeout',
-                            seq: currentLobby.gameData.currentSeq
-                        });
-                        if (currentLobby.gameData.logs.length > 5) currentLobby.gameData.logs.splice(0, currentLobby.gameData.logs.length - 5);
-                        
-                        // Generate new sequence avoiding recent ones after timeout
-                        let newSequence;
-                        let attempts = 0;
-                        do {
-                            newSequence = getRandomSequence(currentLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
-                            attempts++;
-                        } while (currentLobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
-                        
-                        currentLobby.gameData.currentSeq = newSequence;
-                        
-                        // Track sequence history to avoid repetition (keep last 5 sequences)
-                        currentLobby.gameData.sequenceHistory.push(newSequence);
-                        if (currentLobby.gameData.sequenceHistory.length > 5) {
-                            currentLobby.gameData.sequenceHistory.shift();
-                        }
-                        
-                        // Clear timeout reference
-                        currentLobby.gameData.timeout = null;
-                        saveLobbies();
-
-                        if (Object.values(currentLobby.gameData.lives).filter(lives => lives > 0).length <= 1) {
-                            await endGame(`🎉 Game over! The winner is <@${Object.keys(currentLobby.gameData.lives).find(id => currentLobby.gameData.lives[id] > 0)}>`);
-                            return;
-                        }
-
-                        currentLobby.gameData.currentPlayerIndex = (currentLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
-                        while (currentLobby.gameData.lives[playersInGame[currentLobby.gameData.currentPlayerIndex]] <= 0) {
-                            currentLobby.gameData.currentPlayerIndex = (currentLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
-                        }
-                        await nextTurn();
-                    }, currentLobby.settings.turnTime * 1000);
-
-                    msgCollector.on('collect', async msg => {
-                        const content = msg.content.toLowerCase().trim();
-                        await msg.delete().catch(() => {});
-                        const updatedLobby = lobbies[guildId][gameId];
-                        if (!updatedLobby || !updatedLobby.gameData) return;
-
-                        // Ensure dictionary is a Set
-                        if (!(updatedLobby.gameData.dictionary instanceof Set)) {
-                            updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
-                        }
-
-                        // Ensure usedWords is a Set
-                        if (!(updatedLobby.gameData.usedWords instanceof Set)) {
-                            updatedLobby.gameData.usedWords = new Set(updatedLobby.gameData.usedWords || []);
-                        }
-
-                        const isValidWord = updatedLobby.gameData.dictionary.has(content);
-                        const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
-                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);
-
-                        if (isValidWord && containsSequence && !isWordUsed) {
-                            msgCollector.stop();
-                            clearTimeout(updatedLobby.gameData.timeout);
-                            updatedLobby.gameData.timeout = null;
-
-                            updatedLobby.gameData.usedWords.add(content);
-
-                            // Ensure usedLetters is a Map
-                            if (!(updatedLobby.gameData.usedLetters instanceof Map)) {
-                                const usedLettersMap = new Map();
-                                for (const userId in updatedLobby.gameData.usedLetters) {
-                                    usedLettersMap.set(userId, new Set(updatedLobby.gameData.usedLetters[userId] || []));
-                                }
-                                updatedLobby.gameData.usedLetters = usedLettersMap;
-                            }
-
-                            // Get the current player's personal used letters set
-                            let playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
-                            if (!playerUsedLetters) {
-                                playerUsedLetters = new Set();
-                                updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
-                            }
-                            
-                            // Add each letter of the played word to their personal set (only a-v)
-                            for (const letter of content) {
-                                if (letter >= 'a' && letter <= 'v') {
-                                    playerUsedLetters.add(letter);
-                                }
-                            }
-                            
-                            // Ensure the updated set is saved back to the map
-                            updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
-
-                            // Initialize wordsPlayedCount if it doesn't exist
-                            if (!updatedLobby.gameData.wordsPlayedCount) {
-                                updatedLobby.gameData.wordsPlayedCount = 0;
-                            }
-                            updatedLobby.gameData.wordsPlayedCount++;
-
-                            updatedLobby.gameData.logs.push({
-                                player: currentPlayerId,
-                                word: content,
-                                seq: updatedLobby.gameData.currentSeq
-                            });
-                            if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
-
-                            // Check if this player has now completed their alphabet (a-v = 22 letters)
-                            if (playerUsedLetters.size >= 22) {
-                                updatedLobby.gameData.lives[currentPlayerId]++;
-                                updatedLobby.gameData.logs.push({
-                                    player: 'System',
-                                    word: `<@${currentPlayerId}> completed alphabet! +1 life`,
-                                    seq: '—'
-                                });
-                                if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
-                                // Reset the player's alphabet to start over
-                                updatedLobby.gameData.usedLetters.set(currentPlayerId, new Set());
-                            }
-
-                            // Generate new sequence avoiding recent ones
-                            let newSequence;
-                            let attempts = 0;
-                            do {
-                                newSequence = getRandomSequence(updatedLobby.gameData.dictionary, Math.random() < 0.5 ? 2 : 3);
-                                attempts++;
-                            } while (updatedLobby.gameData.sequenceHistory.includes(newSequence) && attempts < 20);
-                            
-                            updatedLobby.gameData.currentSeq = newSequence;
-                            
-                            // Track sequence history to avoid repetition (keep last 5 sequences)
-                            updatedLobby.gameData.sequenceHistory.push(newSequence);
-                            if (updatedLobby.gameData.sequenceHistory.length > 5) {
-                                updatedLobby.gameData.sequenceHistory.shift();
-                            }
-                            updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
-                            while (updatedLobby.gameData.lives[playersInGame[updatedLobby.gameData.currentPlayerIndex]] <= 0) {
-                                updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
-                            }
-
-                            saveLobbies();
-                            await nextTurn();
-                        } else {
-                            // Log the invalid attempt
-                            let reason;
-                            if (!isValidWord) {
-                                reason = 'Invalid word';
-                                updatedLobby.gameData.logs.push({
-                                    player: currentPlayerId,
-                                    word: `❌ ${content}`,
-                                    seq: updatedLobby.gameData.currentSeq
-                                });
-                            } else if (!containsSequence) {
-                                reason = 'No sequence';
-                                updatedLobby.gameData.logs.push({
-                                    player: currentPlayerId,
-                                    word: `❌ ${content}`,
-                                    seq: updatedLobby.gameData.currentSeq
-                                });
-                            } else if (isWordUsed) {
-                                reason = 'Already used';
-                                updatedLobby.gameData.logs.push({
-                                    player: currentPlayerId,
-                                    word: `❌ ${content}`,
-                                    seq: updatedLobby.gameData.currentSeq
-                                });
-                            }
-                            
-                            if (updatedLobby.gameData.logs.length > 5) {
-                                updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
-                            }
-                            
-                            saveLobbies();
-                            await updateGameMessage();
-                            
-                            await interaction.followUp({
-                                content: `❌ ${reason}. Try again.`,
-                                ephemeral: true
-                            });
-                        }
-                    });
-                };
-
-                const btnCollector = gameMessage.createMessageComponentCollector({
-                    componentType: ComponentType.Button,
-                    time: 10 * 60 * 1000,
-                });
-
-                btnCollector.on('collect', async btn => {
-                    if (btn.customId === 'stop_game') {
-                        if (btn.user.id !== lobby.owner) {
-                            return btn.reply({
-                                content: '❌ Only the owner can stop the game.',
-                                ephemeral: true
-                            });
-                        }
-                        await btn.deferUpdate();
-                        await endGame('🛑 Game stopped by user.');
-                        btnCollector.stop('stopped');
-                    }
-                });
-
-                await nextTurn();
-            }
-
-            if (i.customId === 'cancel_room') {
-                if (i.user.id !== lobby.owner) return i.reply({
-                    content: '❌ Only the owner can cancel the room.',
-                    ephemeral: true
-                });
-
-                delete lobbies[guildId][gameId];
-                saveLobbies();
-
-                await i.deferUpdate();
-                await interaction.editReply({
-                    content: '🗑️ Lobby has been canceled.',
-                    embeds: [],
-                    components: []
-                });
-                collector.stop('canceled');
-                return;
-            }
+            time: 300000 // Increased to 5 minutes
         });
 
         const selectCollector = message.createMessageComponentCollector({
             componentType: ComponentType.StringSelect,
-            time: 120000
+            time: 300000 // Increased to 5 minutes
         });
 
-        selectCollector.on('collect', async i => {
-            const lobby = lobbies[guildId][gameId];
-            if (!lobby) return i.reply({
-                content: '❌ This lobby no longer exists.',
-                ephemeral: true
-            });
+        // Use the extracted functions for handling interactions
+        await handleLobbyButtonInteractions(collector, interaction, lobbies[guildId][gameId], guildId, gameId);
+        await handleLobbySelectInteractions(selectCollector, interaction, lobbies[guildId][gameId]);
 
-            lobby.lastActivity = Date.now();
-
-            if (i.customId === 'settings_menu') {
-                if (i.user.id !== lobby.owner) return i.reply({
-                    content: '❌ Only the owner can change settings.',
-                    ephemeral: true
-                });
-
-                const value = i.values[0];
-
-                if (value === 'english' || value === 'french') {
-                    lobby.settings.language = value;
-                } else if (value.startsWith('lives_')) {
-                    lobby.settings.lives = parseInt(value.split('_')[1]);
-                } else if (value.startsWith('time_')) {
-                    lobby.settings.turnTime = parseInt(value.split('_')[1]);
+        // Handle collector timeouts
+        collector.on('end', (collected, reason) => {
+            if (reason === 'time') {
+                const lobby = lobbies[guildId] && lobbies[guildId][gameId];
+                if (lobby && !lobby.gameData) {
+                    delete lobbies[guildId][gameId];
+                    saveLobbies();
+                    interaction.editReply({
+                        content: '🕐 Lobby closed due to inactivity.',
+                        embeds: [],
+                        components: []
+                    }).catch(() => {});
                 }
+            }
+        });
 
-                saveLobbies();
-                await i.deferUpdate();
-                await interaction.editReply({
-                    embeds: [generateLobbyEmbed(lobby)],
-                    components: lobbyComponents()
-                });
-                return;
+        selectCollector.on('end', (collected, reason) => {
+            if (reason === 'time') {
+                const lobby = lobbies[guildId] && lobbies[guildId][gameId];
+                if (lobby && !lobby.gameData) {
+                    delete lobbies[guildId][gameId];
+                    saveLobbies();
+                }
             }
         });
     },

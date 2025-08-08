@@ -76,7 +76,7 @@ module.exports = {
       option.setName('turn_time')
         .setDescription('Time per turn in seconds')
         .setMinValue(5)
-        .setMaxValue(60)),
+        .setMaxValue(30)),
 
   async execute(interaction) {
     const language = interaction.options.getString('language') || 'english';
@@ -123,11 +123,11 @@ module.exports = {
     // Settings embed before game start
     const settingsEmbed = new EmbedBuilder()
       
-      .setDescription('- ⚙️ Here are your game settings:')
+      .setTitle('⚙️ Game settings:')
       .addFields(
-        { name: '🚩 Language', value: language, inline: true },
-        { name: '♥️ Lives', value: userLives.toString(), inline: true },
-        { name: '🕐 Turn Time', value: `${turnTime}s`, inline: true }
+        { name: 'Language', value: language, inline: true },
+        { name: 'Lives', value: userLives.toString(), inline: true },
+        { name: 'Turn Time', value: `${turnTime}s`, inline: true }
       )
       .setColor(0xff0000);
       
