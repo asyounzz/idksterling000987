@@ -568,7 +568,6 @@ module.exports = {
 
                     clearTimeout(currentLobby.gameData.timeout);
                     currentLobby.gameData.isGameActive = false;
-                    saveLobbies();
 
                     await interaction.editReply({
                         content: reason,
@@ -576,7 +575,12 @@ module.exports = {
                         components: [],
                     }).catch(() => {});
 
+                    // Clean up the game from memory and JSON file
                     delete lobbies[guildId][gameId];
+                    // If no games left in this guild, remove the guild entry
+                    if (Object.keys(lobbies[guildId] || {}).length === 0) {
+                        delete lobbies[guildId];
+                    }
                     saveLobbies();
                 };
 
@@ -623,7 +627,8 @@ module.exports = {
                         saveLobbies();
 
                         if (Object.values(currentLobby.gameData.lives).filter(lives => lives > 0).length <= 1) {
-                            await endGame(`🎉 Game over! The winner is <@${Object.keys(currentLobby.gameData.lives).find(id => currentLobby.gameData.lives[id] > 0)}>`);
+                            const winner = Object.keys(currentLobby.gameData.lives).find(id => currentLobby.gameData.lives[id] > 0);
+                            await endGame(`🎉 Game over! The winner is <@${winner}>`);
                             return;
                         }
 
