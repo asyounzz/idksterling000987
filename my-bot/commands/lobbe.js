@@ -50,7 +50,7 @@ function loadLobbies() {
                     } else if (!(lobby.gameData.dictionary instanceof Set)) {
                         lobby.gameData.dictionary = new Set();
                     }
-                }</old_str>
+                }
             }
         }
         lobbies = parsedLobbies;
