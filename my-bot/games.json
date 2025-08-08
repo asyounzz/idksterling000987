@@ -1,7 +1,7 @@
 {
   "972244217927712899": {
-    "tao4uyjf06": {
-      "gameId": "tao4uyjf06",
+    "9f4bhstj5m": {
+      "gameId": "9f4bhstj5m",
       "channelId": "972244217927712902",
       "owner": "1129725971541540975",
       "players": [
@@ -14,9 +14,9 @@
         "lives": 3,
         "turnTime": 10
       },
-      "lastActivity": 1754655970997,
+      "lastActivity": 1754656217652,
       "gameData": null,
-      "gameMessageId": "1403353599727370353"
+      "gameMessageId": null
     }
   }
 }
