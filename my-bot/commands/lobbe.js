@@ -155,6 +155,7 @@ function createGameEmbed(lobby, currentPlayerId) {
     const gameStartTime = lobby.gameData.gameStartTime || Date.now();
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
 
+    // Count only valid words (not timeout/error entries)
     const usedWords = lobby.gameData.usedWords || new Set();
     const wordsPlayedCount = usedWords.size || 0;
 
@@ -639,31 +640,27 @@ module.exports = {
                                 playerUsedLetters = new Set();
                                 updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
                             }
-                            // Add each letter of the played word to their personal set
-                            content.split('').forEach(letter => {
-                                if (letter >= 'a' && letter <= 'z') {
+                            
+                            // Add each letter of the played word to their personal set (only a-v)
+                            for (const letter of content) {
+                                if (letter >= 'a' && letter <= 'v') {
                                     playerUsedLetters.add(letter);
                                 }
-                            });
+                            }
 
                             updatedLobby.gameData.logs.push({
                                 player: currentPlayerId,
                                 word: content,
                                 seq: updatedLobby.gameData.currentSeq
                             });
-                       if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+                            if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
 
                             // Check if this player has now completed their alphabet (a-v = 22 letters)
                             if (playerUsedLetters.size >= 22) {
                                 updatedLobby.gameData.lives[currentPlayerId]++;
                                 updatedLobby.gameData.logs.push({
                                     player: 'System',
-                                    word: '—',
-                                    seq: '—'
-                                });
-                                updatedLobby.gameData.logs.push({
-                                    player: 'System',
-                                    word: `<@${currentPlayerId}> completed their alphabet and earned an extra life!`,
+                                    word: `<@${currentPlayerId}> completed alphabet! +1 life`,
                                     seq: '—'
                                 });
                                 // Reset the player's alphabet to start over
