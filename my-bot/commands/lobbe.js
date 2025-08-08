@@ -145,7 +145,9 @@ function getRandomSequence(dictionary, length = 2, avoidSequences = []) {
  */
 function formatLetters(usedLettersSet) {
     const all = 'abcdefghijklmnopqrstuv'.split('');
-    return all.map(letter => usedLettersSet.has(letter) ? `🔴${letter}` : `🔵${letter}`).join(' ');
+    // Ensure usedLettersSet is a Set and check each letter
+    const letterSet = usedLettersSet instanceof Set ? usedLettersSet : new Set();
+    return all.map(letter => letterSet.has(letter) ? `🔴${letter}` : `🔵${letter}`).join(' ');
 }
 
 /**
@@ -157,7 +159,7 @@ function formatLetters(usedLettersSet) {
 function createGameEmbed(lobby, currentPlayerId) {
     if (!lobby || !lobby.gameData) {
         return new EmbedBuilder()
-            .setTitle(`🎯 Lobby - ${lobby.gameId}`)
+            .setTitle(`🎯 Lobby - ${lobby?.gameId || 'Unknown'}`)
             .setDescription('Game is not yet started or has ended.')
             .setColor('Blue');
     }
@@ -171,7 +173,7 @@ function createGameEmbed(lobby, currentPlayerId) {
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
     
     const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords.size;
+    const wordsPlayedCount = usedWords.size || 0;
     
     // Defensive check: ensure usedLetters is a Map before getting a value.
     const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
@@ -179,14 +181,14 @@ function createGameEmbed(lobby, currentPlayerId) {
     const currentSeq = lobby.gameData.currentSeq || 'Loading...';
 
     return new EmbedBuilder()
-        .setTitle(`💣 BombParty - Lobby ${lobby.gameId}`)
+        .setTitle(`💣 BombParty - Lobby ${lobby.gameId || 'Unknown'}`)
         .setDescription(`**Current Sequence:** \`${currentSeq}\``)
         .addFields(
             { name: 'Players & Lives', value: playersLives, inline: true },
             { name: '⏳ Elapsed Time', value: `${elapsedSeconds}s`, inline: true },
-            { name: '🔢 Words Played', value: wordsPlayedCount.toString(), inline: true },
+            { name: '🔢 Words Played', value: String(wordsPlayedCount), inline: true },
             { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
-            { name: `🔠 Used Letters (<@${currentPlayerId}>)`, value: formatLetters(currentPlayerLetters), inline: false }
+            { name: `🔠 Used Letters (<@${currentPlayerId || 'Unknown'}>)`, value: formatLetters(currentPlayerLetters), inline: false }
         )
         .setFooter({ text: '🔥 Use every letter of the alphabet above to earn an extra life!' })
         .setColor(0xffcc00);
