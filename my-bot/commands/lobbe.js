@@ -606,7 +606,7 @@ module.exports = {
 
                         const isValidWord = updatedLobby.gameData.dictionary.has(content);
                         const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
-                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);</old_str>
+                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);
 
                         if (isValidWord && containsSequence && !isWordUsed) {
                             msgCollector.stop();
