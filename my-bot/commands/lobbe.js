@@ -558,7 +558,11 @@ module.exports = {
                     const currentLobby = lobbies[guildId][gameId];
                     if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
 
-                    clearTimeout(currentLobby.gameData.timeout);
+                    // Clear any existing timeout first
+                    if (currentLobby.gameData.timeout) {
+                        clearTimeout(currentLobby.gameData.timeout);
+                        currentLobby.gameData.timeout = null;
+                    }
                     await updateGameMessage();
 
                     const currentPlayerId = playersInGame[currentLobby.gameData.currentPlayerIndex];
@@ -626,9 +630,17 @@ module.exports = {
                             }
 
                             // Get the current player's personal used letters set
-                            const playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
+                            let playerUsedLetters = updatedLobby.gameData.usedLetters.get(currentPlayerId);
+                            if (!playerUsedLetters) {
+                                playerUsedLetters = new Set();
+                                updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
+                            }
                             // Add each letter of the played word to their personal set
-                            content.split('').forEach(letter => playerUsedLetters.add(letter));
+                            content.split('').forEach(letter => {
+                                if (letter >= 'a' && letter <= 'z') {
+                                    playerUsedLetters.add(letter);
+                                }
+                            });
 
                             updatedLobby.gameData.logs.push({
                                 player: currentPlayerId,
@@ -637,7 +649,7 @@ module.exports = {
                             });
                        if (updatedLobby.gameData.logs.length > 5) updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
 
-                            // Check if this player has now completed their alphabet
+                            // Check if this player has now completed their alphabet (a-v = 22 letters)
                             if (playerUsedLetters.size >= 22) {
                                 updatedLobby.gameData.lives[currentPlayerId]++;
                                 updatedLobby.gameData.logs.push({
