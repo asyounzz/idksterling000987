@@ -155,9 +155,8 @@ function createGameEmbed(lobby, currentPlayerId) {
     const gameStartTime = lobby.gameData.gameStartTime || Date.now();
     const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
 
-    // Count only valid words (not timeout/error entries)
-    const usedWords = lobby.gameData.usedWords || new Set();
-    const wordsPlayedCount = usedWords.size || 0;
+    // Use the dedicated counter for words played
+    const wordsPlayedCount = lobby.gameData.wordsPlayedCount || 0;
 
     // Check if usedLetters is a Map before trying to get a value from it
     const currentPlayerLetters = (lobby.gameData.usedLetters instanceof Map) ? (lobby.gameData.usedLetters.get(currentPlayerId) || new Set()) : new Set();
@@ -504,6 +503,7 @@ module.exports = {
                     gameStartTime: Date.now(),
                     timeout: null,
                     isGameActive: true,
+                    wordsPlayedCount: 0,
                 };
                 saveLobbies();
 
@@ -647,6 +647,12 @@ module.exports = {
                                     playerUsedLetters.add(letter);
                                 }
                             }
+
+                            // Initialize wordsPlayedCount if it doesn't exist
+                            if (!updatedLobby.gameData.wordsPlayedCount) {
+                                updatedLobby.gameData.wordsPlayedCount = 0;
+                            }
+                            updatedLobby.gameData.wordsPlayedCount++;
 
                             updatedLobby.gameData.logs.push({
                                 player: currentPlayerId,
