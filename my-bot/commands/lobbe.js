@@ -50,7 +50,7 @@ function loadLobbies() {
                     } else if (!(lobby.gameData.dictionary instanceof Set)) {
                         lobby.gameData.dictionary = new Set();
                     }
-                }
+                }</old_str>
             }
         }
         lobbies = parsedLobbies;
@@ -599,9 +599,14 @@ module.exports = {
                             updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
                         }
 
+                        // Ensure usedWords is a Set
+                        if (!(updatedLobby.gameData.usedWords instanceof Set)) {
+                            updatedLobby.gameData.usedWords = new Set(updatedLobby.gameData.usedWords || []);
+                        }
+
                         const isValidWord = updatedLobby.gameData.dictionary.has(content);
                         const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
-                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);
+                        const isWordUsed = updatedLobby.gameData.usedWords.has(content);</old_str>
 
                         if (isValidWord && containsSequence && !isWordUsed) {
                             msgCollector.stop();
