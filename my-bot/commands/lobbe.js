@@ -559,10 +559,9 @@ module.exports = {
                     if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
 
                     // Clear any existing timeout first
-                    if (currentLobby.gameData.timeout) {
-                        clearTimeout(currentLobby.gameData.timeout);
-                        currentLobby.gameData.timeout = null;
-                    }
+                    clearTimeout(currentLobby.gameData.timeout);
+                    currentLobby.gameData.timeout = null;
+                    
                     await updateGameMessage();
 
                     const currentPlayerId = playersInGame[currentLobby.gameData.currentPlayerIndex];
@@ -577,10 +576,13 @@ module.exports = {
                         currentLobby.gameData.lives[currentPlayerId]--;
                         currentLobby.gameData.logs.push({
                             player: currentPlayerId,
-                            word: '—',
+                            word: '❌ Timeout',
                             seq: currentLobby.gameData.currentSeq
                         });
                         if (currentLobby.gameData.logs.length > 5) currentLobby.gameData.logs.splice(0, currentLobby.gameData.logs.length - 5);
+                        
+                        // Clear timeout reference
+                        currentLobby.gameData.timeout = null;
                         saveLobbies();
 
                         if (Object.values(currentLobby.gameData.lives).filter(lives => lives > 0).length <= 1) {
@@ -617,6 +619,8 @@ module.exports = {
 
                         if (isValidWord && containsSequence && !isWordUsed) {
                             msgCollector.stop();
+                            clearTimeout(updatedLobby.gameData.timeout);
+                            updatedLobby.gameData.timeout = null;
 
                             updatedLobby.gameData.usedWords.add(content);
 
@@ -675,8 +679,40 @@ module.exports = {
                             saveLobbies();
                             await nextTurn();
                         } else {
+                            // Log the invalid attempt
+                            let reason;
+                            if (!isValidWord) {
+                                reason = 'Invalid word';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
+                            } else if (!containsSequence) {
+                                reason = 'No sequence';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
+                            } else if (isWordUsed) {
+                                reason = 'Already used';
+                                updatedLobby.gameData.logs.push({
+                                    player: currentPlayerId,
+                                    word: `❌ ${content}`,
+                                    seq: updatedLobby.gameData.currentSeq
+                                });
+                            }
+                            
+                            if (updatedLobby.gameData.logs.length > 5) {
+                                updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
+                            }
+                            
+                            saveLobbies();
+                            await updateGameMessage();
+                            
                             await interaction.followUp({
-                                content: `❌ Invalid word. Try again.`,
+                                content: `❌ ${reason}. Try again.`,
                                 ephemeral: true
                             });
                         }
