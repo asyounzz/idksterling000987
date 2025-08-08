@@ -647,6 +647,9 @@ module.exports = {
                                     playerUsedLetters.add(letter);
                                 }
                             }
+                            
+                            // Update the map with the modified set
+                            updatedLobby.gameData.usedLetters.set(currentPlayerId, playerUsedLetters);
 
                             // Initialize wordsPlayedCount if it doesn't exist
                             if (!updatedLobby.gameData.wordsPlayedCount) {
