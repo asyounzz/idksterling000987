@@ -44,7 +44,12 @@ function loadLobbies() {
                     }
                     lobby.gameData.usedLetters = usedLettersMap;
                     // Defensive check: if dictionary is not present, default to an empty array.
-                    lobby.gameData.dictionary = new Set(lobby.gameData.dictionary || []);
+                    // Also ensure it's converted to a Set whether it's an array or already a Set
+                    if (Array.isArray(lobby.gameData.dictionary)) {
+                        lobby.gameData.dictionary = new Set(lobby.gameData.dictionary);
+                    } else if (!(lobby.gameData.dictionary instanceof Set)) {
+                        lobby.gameData.dictionary = new Set();
+                    }
                 }
             }
         }
@@ -588,6 +593,11 @@ module.exports = {
                         await msg.delete().catch(() => {});
                         const updatedLobby = lobbies[guildId][gameId];
                         if (!updatedLobby || !updatedLobby.gameData) return;
+
+                        // Ensure dictionary is a Set
+                        if (!(updatedLobby.gameData.dictionary instanceof Set)) {
+                            updatedLobby.gameData.dictionary = new Set(updatedLobby.gameData.dictionary || []);
+                        }
 
                         const isValidWord = updatedLobby.gameData.dictionary.has(content);
                         const containsSequence = content.includes(updatedLobby.gameData.currentSeq);
