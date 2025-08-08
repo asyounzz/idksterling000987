@@ -28,3 +28,7 @@ args = "node my-bot/index.js & node my-bot/deploy-commands.js"
 [[ports]]
 localPort = 4000
 externalPort = 80
+
+[[ports]]
+localPort = 7400
+externalPort = 3000

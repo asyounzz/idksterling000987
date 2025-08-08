@@ -3,7 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const express = require('express');
 const app = express();
-const port = process.env.PORT || 4000;
+const port = 4000;
 
 app.get('/', (req, res) => res.send('BombParty Bot is running!'));
 app.listen(port, () => console.log(`Web server listening on port ${port}`));
