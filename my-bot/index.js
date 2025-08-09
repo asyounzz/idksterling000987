@@ -57,7 +57,7 @@ client.on(Events.InteractionCreate, async interaction => {
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({
-    activities: [{ name: 'BombParty', type: 3 }],
+    activities: [{ name: 'with words n bombs', type: 1 }],
     status: 'online',
   });
 });
