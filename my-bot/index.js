@@ -33,22 +33,18 @@ if (fs.existsSync(commandsPath)) {
   }
 }
 
-// Handle All Interactions in a Unified Way
+// Handle Interactions
 client.on(Events.InteractionCreate, async interaction => {
   try {
-    // Slash command
+    // Only handle slash commands here
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
-      if (command) await command.execute(interaction, client);
-    }
-
-    // Buttons or modals (handled inside the bombparty command file)
-    else {
-      const command = client.commands.get('bombparty');
-      if (command && command.handleComponent) {
-        await command.handleComponent(interaction, client);
+      if (command) {
+        await command.execute(interaction, client);
       }
     }
+    // Button and other component interactions are handled by collectors within commands
+    // No need to handle them globally
   } catch (error) {
     console.error('❌ Interaction error:', error);
     if (!interaction.replied && !interaction.deferred) {
