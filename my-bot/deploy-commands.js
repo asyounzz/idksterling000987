@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Your bot info
-const clientId = '1350990854185156751';
+const clientId = '1353415772931752067';
 const token = process.env.BOTTOKEN;
 
 if (!token) {
