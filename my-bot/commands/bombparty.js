@@ -78,6 +78,8 @@ module.exports = {
         .setMinValue(5)
         .setMaxValue(30)),
 
+  activeGames: activeGames,
+
   async execute(interaction) {
     const language = interaction.options.getString('language') || 'english';
     const lives = interaction.options.getInteger('lives') || 3;
