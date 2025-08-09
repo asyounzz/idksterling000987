@@ -78,8 +78,6 @@ module.exports = {
         .setMinValue(5)
         .setMaxValue(30)),
 
-
-
   async execute(interaction) {
     const language = interaction.options.getString('language') || 'english';
     const lives = interaction.options.getInteger('lives') || 3;
@@ -98,6 +96,9 @@ module.exports = {
     let currentSeq = getRandomSequence(dictionary, Math.random() < 0.5 ? 2 : 3);
     let turn = 'user';
     let timeout;
+    let gameMessage;
+    let isGameActive = false;
+    let isUpdatingMessage = false; // Prevent race conditions
     const gameStartTime = Date.now();
 
     // Buttons for game control
@@ -106,7 +107,7 @@ module.exports = {
         .setCustomId('stop_game')
         .setLabel('Stop Game')
         .setStyle(ButtonStyle.Danger)
-      .setEmoji('🛑')
+        .setEmoji('🛑')
     );
 
     const startRow = new ActionRowBuilder().addComponents(
@@ -114,17 +115,16 @@ module.exports = {
         .setCustomId('start_game')
         .setLabel('Start Game')
         .setEmoji('✅')
-      .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('cancel_game')
         .setLabel('Cancel')
         .setStyle(ButtonStyle.Danger)
-      .setEmoji('❌')
+        .setEmoji('❌')
     );
 
     // Settings embed before game start
     const settingsEmbed = new EmbedBuilder()
-      
       .setTitle('⚙️ Game settings:')
       .addFields(
         { name: 'Language', value: language, inline: true },
@@ -132,7 +132,7 @@ module.exports = {
         { name: 'Turn Time', value: `${turnTime}s`, inline: true }
       )
       .setColor(0xff0000);
-      
+
     await interaction.reply({ embeds: [settingsEmbed], components: [startRow] });
 
     const startCollector = interaction.channel.createMessageComponentCollector({
@@ -146,7 +146,13 @@ module.exports = {
         return btn.reply({ content: 'Only the game creator can control this.', ephemeral: true });
       }
 
+      if (!btn.isRepliable()) {
+        console.log('Start button interaction is no longer repliable');
+        return;
+      }
+
       if (btn.customId === 'cancel_game') {
+        await btn.deferUpdate();
         await interaction.editReply({ content: '❌ Game canceled.', embeds: [], components: [] });
         startCollector.stop();
         return;
@@ -156,17 +162,21 @@ module.exports = {
         await btn.deferUpdate();
 
         activeGames.set(interaction.user.id, true);
+        isGameActive = true;
 
-        const gameMessage = await interaction.editReply({
+        gameMessage = await interaction.editReply({
           content: `🎮 Game started! You have **${turnTime}s** to type a word containing: \`${currentSeq}\``,
           embeds: [createGameEmbed(userLives, currentSeq, logs, usedLetters, 0, 0)],
           components: [stopRow]
         });
 
-        // Helper to update game message
+        // Helper to update game message with race condition protection
         async function updateGameMessage() {
-          const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
+          if (!isGameActive || isUpdatingMessage) return;
+          isUpdatingMessage = true;
+          
           try {
+            const elapsedSeconds = Math.floor((Date.now() - gameStartTime) / 1000);
             await gameMessage.edit({
               content: turn === 'user'
                 ? `⏳ Your turn! You have **${turnTime}s** to type a word containing: \`${currentSeq}\``
@@ -175,36 +185,59 @@ module.exports = {
               components: [stopRow],
             });
           } catch (err) {
-            console.error('Failed to update game message:', err);
+            console.error('Failed to update game message:', err.message);
+            // Don't crash the game on message update failure
+          } finally {
+            isUpdatingMessage = false;
           }
         }
 
-        // Collect user messages (guesses)
+        // Collect user messages (guesses) - Reduced timeout to prevent interaction expiry
         const msgCollector = interaction.channel.createMessageCollector({
-          filter: m => m.author.id === interaction.user.id,
-          time: 10 * 60 * 1000
+          filter: m => m.author.id === interaction.user.id && isGameActive,
+          time: 5 * 60 * 1000 // Reduced from 10 minutes to 5
         });
 
         // Collect button presses during game
         const btnCollector = gameMessage.createMessageComponentCollector({
           componentType: ComponentType.Button,
-          time: 10 * 60 * 1000
+          time: 5 * 60 * 1000 // Reduced from 10 minutes to 5
         });
 
         const endGame = async (reason) => {
+          if (!isGameActive) return; // Prevent double-ending
+          
+          isGameActive = false;
           clearTimeout(timeout);
-          msgCollector.stop();
-          btnCollector.stop();
+          
+          try {
+            msgCollector.stop('game_ended');
+            btnCollector.stop('game_ended');
+          } catch (err) {
+            console.error('Error stopping collectors:', err.message);
+          }
+          
           activeGames.delete(interaction.user.id);
 
-          await gameMessage.edit({
-            content: reason,
-            embeds: [createGameEmbed(userLives, currentSeq, logs.slice(-5), usedLetters, usedWords.size, Math.floor((Date.now() - gameStartTime) / 1000))],
-            components: [],
-          }).catch(() => { });
+          // Wait for any pending message updates to complete
+          while (isUpdatingMessage) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+
+          try {
+            await gameMessage.edit({
+              content: reason,
+              embeds: [createGameEmbed(userLives, currentSeq, logs.slice(-5), usedLetters, usedWords.size, Math.floor((Date.now() - gameStartTime) / 1000))],
+              components: [],
+            });
+          } catch (err) {
+            console.error('Failed to edit final game message:', err.message);
+          }
         };
 
         const nextTurn = async () => {
+          if (!isGameActive) return;
+          
           clearTimeout(timeout);
 
           if (userLives <= 0) {
@@ -217,9 +250,12 @@ module.exports = {
             await updateGameMessage();
 
             timeout = setTimeout(async () => {
+              if (!isGameActive) return; // Check if game is still active
+              
               userLives--;
               logs.push({ player: '❌ Timeout', word: '—', seq: currentSeq });
               if (logs.length > 5) logs.splice(0, logs.length - 5);
+              
               await updateGameMessage();
 
               if (userLives <= 0) {
@@ -237,6 +273,7 @@ module.exports = {
               await endGame('🎉 You win! AI cannot find a valid word.');
               return;
             }
+            
             usedWords.add(aiWord);
             logs.push({ player: '🤖 AI', word: aiWord, seq: currentSeq });
             if (logs.length > 5) logs.splice(0, logs.length - 5);
@@ -245,13 +282,22 @@ module.exports = {
             turn = 'user';
 
             await updateGameMessage();
-            await nextTurn();
+            // Small delay before next turn to prevent rapid-fire turns
+            setTimeout(() => nextTurn(), 1000);
           }
         };
 
         msgCollector.on('collect', async msg => {
-          if (turn !== 'user' || msg.author.id !== interaction.user.id) return;
-          await msg.delete().catch(() => { });
+          if (turn !== 'user' || msg.author.id !== interaction.user.id || !isGameActive) return;
+          
+          // Clear timeout immediately to prevent race conditions
+          clearTimeout(timeout);
+          
+          try {
+            await msg.delete();
+          } catch (err) {
+            console.error('Failed to delete user message:', err.message);
+          }
 
           const content = msg.content.toLowerCase().trim();
 
@@ -259,6 +305,21 @@ module.exports = {
             logs.push({ player: '❌ Invalid', word: content, seq: currentSeq });
             if (logs.length > 5) logs.splice(0, logs.length - 5);
             await updateGameMessage();
+            
+            // Reset timeout for same turn
+            timeout = setTimeout(async () => {
+              if (!isGameActive) return;
+              userLives--;
+              logs.push({ player: '❌ Timeout', word: '—', seq: currentSeq });
+              if (logs.length > 5) logs.splice(0, logs.length - 5);
+              await updateGameMessage();
+              if (userLives <= 0) {
+                await endGame('💀 You lost! No lives left after timeout.');
+                return;
+              }
+              turn = 'ai';
+              await nextTurn();
+            }, turnTime * 1000);
             return;
           }
 
@@ -266,6 +327,21 @@ module.exports = {
             logs.push({ player: '❌ No sequence', word: content, seq: currentSeq });
             if (logs.length > 5) logs.splice(0, logs.length - 5);
             await updateGameMessage();
+            
+            // Reset timeout for same turn
+            timeout = setTimeout(async () => {
+              if (!isGameActive) return;
+              userLives--;
+              logs.push({ player: '❌ Timeout', word: '—', seq: currentSeq });
+              if (logs.length > 5) logs.splice(0, logs.length - 5);
+              await updateGameMessage();
+              if (userLives <= 0) {
+                await endGame('💀 You lost! No lives left after timeout.');
+                return;
+              }
+              turn = 'ai';
+              await nextTurn();
+            }, turnTime * 1000);
             return;
           }
 
@@ -273,6 +349,21 @@ module.exports = {
             logs.push({ player: '❌ Used word', word: content, seq: currentSeq });
             if (logs.length > 5) logs.splice(0, logs.length - 5);
             await updateGameMessage();
+            
+            // Reset timeout for same turn
+            timeout = setTimeout(async () => {
+              if (!isGameActive) return;
+              userLives--;
+              logs.push({ player: '❌ Timeout', word: '—', seq: currentSeq });
+              if (logs.length > 5) logs.splice(0, logs.length - 5);
+              await updateGameMessage();
+              if (userLives <= 0) {
+                await endGame('💀 You lost! No lives left after timeout.');
+                return;
+              }
+              turn = 'ai';
+              await nextTurn();
+            }, turnTime * 1000);
             return;
           }
 
@@ -294,6 +385,7 @@ module.exports = {
             userLives++;
             usedLetters.clear();
             logs.push({ player: '🎉 Bonus', word: 'All letters used! +1 life', seq: '' });
+            if (logs.length > 5) logs.splice(0, logs.length - 5);
           }
 
           // New sequence for AI turn
@@ -302,10 +394,7 @@ module.exports = {
           // Switch turn to AI
           turn = 'ai';
 
-          clearTimeout(timeout); // reset timeout since user answered
-
           await updateGameMessage();
-
           await nextTurn(); // AI turn
         });
 
@@ -313,9 +402,32 @@ module.exports = {
           if (btn.user.id !== interaction.user.id) {
             return btn.reply({ content: 'Only the game creator can control this.', ephemeral: true });
           }
+          
+          if (!btn.isRepliable()) {
+            console.log('Stop button interaction is no longer repliable');
+            return;
+          }
+          
           if (btn.customId === 'stop_game') {
-            await btn.deferUpdate();
-            await endGame('🛑 Game stopped by user.');
+            try {
+              await btn.deferUpdate();
+              await endGame('🛑 Game stopped by user.');
+            } catch (err) {
+              console.error('Error handling stop button:', err.message);
+            }
+          }
+        });
+
+        // Handle collector end events
+        msgCollector.on('end', (collected, reason) => {
+          if (reason === 'time' && isGameActive) {
+            endGame('⏰ Game ended due to timeout.');
+          }
+        });
+
+        btnCollector.on('end', (collected, reason) => {
+          if (reason === 'time' && isGameActive) {
+            endGame('⏰ Game ended due to timeout.');
           }
         });
 
@@ -328,8 +440,17 @@ module.exports = {
 
     startCollector.on('end', collected => {
       if (collected.size === 0) {
-        interaction.editReply({ content: '⏰ Game start timed out.', embeds: [], components: [] }).catch(() => { });
+        interaction.editReply({ 
+          content: '⏰ Game start timed out.', 
+          embeds: [], 
+          components: [] 
+        }).catch(err => {
+          console.error('Failed to edit reply on timeout:', err.message);
+        });
       }
     });
   },
+
+  // Export activeGames for potential use by other commands
+  activeGames: activeGames
 };
