@@ -346,7 +346,7 @@ module.exports = {
                   if (logs.length > 5) logs.splice(0, logs.length - 5);
                   
                   if (userLives <= 0) {
-                    await endGame('💀 You lost! No lives left after timeout.');
+                    await endGame('💀 You lost! No lives left.');
                     return;
                   }
                   turn = 'ai';
