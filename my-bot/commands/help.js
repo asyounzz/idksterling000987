@@ -22,7 +22,7 @@ module.exports = {
     const badgeCommands = {
       'bombparty': 'Starts a solo game of BombParty (against AI).',
       'lobby': 'Let you create a multiplayer lobby of BombParty (2-6 players)',
-      'howtoplay': 'Gives you the beginner guide to play BombParty.'
+      'howtoplay': 'Gives you the beginner guide to play BombParty.',
       'words': 'Gives you a list of all words containing a certain sequence of letters.'
       
     };
