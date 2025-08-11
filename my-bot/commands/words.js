@@ -183,7 +183,7 @@ module.exports = {
                 ))
         .addStringOption(option =>
             option.setName('sequence')
-                .setDescription('Letter sequence to search for')
+                .setDescription('Letter sequence to search for (no numbers allowed)')
                 .setRequired(true)
                 .setMinLength(1)
                 .setMaxLength(10)),
@@ -202,10 +202,18 @@ module.exports = {
             });
         }
 
-        // Validate sequence (only letters)
-        if (!/^[a-zA-Z]+$/.test(sequence)) {
+        // Validate sequence (no numbers allowed, but allow accented characters and other letters)
+        if (/\d/.test(sequence)) {
             return interaction.reply({
-                content: '❌ Sequence must contain only letters (a-z).',
+                content: '❌ Sequence cannot contain numbers (0-9).',
+                ephemeral: true
+            });
+        }
+
+        // Check if sequence contains only whitespace or is empty after trim
+        if (sequence.trim().length === 0) {
+            return interaction.reply({
+                content: '❌ Sequence cannot be empty or contain only spaces.',
                 ephemeral: true
             });
         }
