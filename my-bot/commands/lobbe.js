@@ -272,7 +272,7 @@ function stopMessageCollector(lobby) {
 }
 
 /**
- * Creates and manages a timeout for a player's turn
+ * Creates and manages a timeout for a player's turn (Enhanced with better race condition handling)
  */
 function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, nextTurnCallback) {
     // Clear any existing timeout first
@@ -282,8 +282,12 @@ function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, ne
     
     lobby.gameData.timeout = setTimeout(async () => {
         try {
-            // Prevent race conditions
-            if (lobby.gameData.processingTurn) return;
+            // Prevent race conditions - check if already processing or game ended
+            if (lobby.gameData.processingTurn || !lobby.gameData.isGameActive) {
+                return;
+            }
+            
+            // Set processing flag immediately
             lobby.gameData.processingTurn = true;
             
             // Stop message collector if it exists
@@ -317,15 +321,15 @@ function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, ne
                 lobby.gameData.sequenceHistory.shift();
             }
             
-            // Clear timeout reference and processing flag
+            // Clear timeout reference 
             lobby.gameData.timeout = null;
-            lobby.gameData.processingTurn = false;
             saveLobbies();
 
             // Check for game end
             const alivePlayers = Object.values(lobby.gameData.lives).filter(lives => lives > 0).length;
             if (alivePlayers <= 1) {
                 const winnerId = Object.keys(lobby.gameData.lives).find(id => lobby.gameData.lives[id] > 0);
+                lobby.gameData.processingTurn = false; // Reset flag before ending
                 await endGameCallback(`🎉 Game over! The winner is <@${winnerId}>`);
                 return;
             }
@@ -336,7 +340,10 @@ function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, ne
                 lobby.gameData.currentPlayerIndex = (lobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
             }
             
+            // Reset processing flag before next turn
+            lobby.gameData.processingTurn = false;
             await nextTurnCallback();
+            
         } catch (error) {
             console.error('Error in timeout handler:', error);
             lobby.gameData.processingTurn = false;
@@ -840,6 +847,7 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
         }
     };
 
+    // Enhanced nextTurn function with proper cleanup and race condition handling
     const nextTurn = async () => {
         const currentLobby = lobbies[guildId][gameId];
         if (!currentLobby || !currentLobby.gameData || !currentLobby.gameData.isGameActive) return;
@@ -868,14 +876,22 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
         setPlayerTimeout(currentLobby, interaction, playersInGame, endGame, nextTurn);
 
         msgCollector.on('collect', async msg => {
-            // Prevent race conditions
-            if (currentLobby.gameData.processingTurn) return;
+            // Prevent race conditions - check if we're already processing or game ended
+            if (currentLobby.gameData.processingTurn || !currentLobby.gameData.isGameActive) {
+                await msg.delete().catch(() => {});
+                return;
+            }
+            
+            // Set processing flag immediately to prevent race conditions
+            currentLobby.gameData.processingTurn = true;
             
             const content = msg.content.toLowerCase().trim();
             await msg.delete().catch(() => {});
             
             const updatedLobby = lobbies[guildId][gameId];
-            if (!updatedLobby || !updatedLobby.gameData || !updatedLobby.gameData.isGameActive) return;
+            if (!updatedLobby || !updatedLobby.gameData || !updatedLobby.gameData.isGameActive) {
+                return;
+            }
 
             // Ensure dictionary is a Set
             if (!(updatedLobby.gameData.dictionary instanceof Set)) {
@@ -892,8 +908,7 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
             const isWordUsed = updatedLobby.gameData.usedWords.has(content);
 
             if (isValidWord && containsSequence && !isWordUsed) {
-                // Valid word - set processing flag and stop collector/timeout
-                updatedLobby.gameData.processingTurn = true;
+                // Valid word - stop collector and timeout immediately
                 msgCollector.stop('valid_word');
                 clearLobbyTimeout(updatedLobby);
 
@@ -973,12 +988,18 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                     updatedLobby.gameData.currentPlayerIndex = (updatedLobby.gameData.currentPlayerIndex + 1) % playersInGame.length;
                 }
 
-                // Reset processing flag
+                // Reset processing flag before starting next turn
                 updatedLobby.gameData.processingTurn = false;
                 saveLobbies();
                 await nextTurn();
+                
             } else {
-                // Invalid word - log it and reset timer for same player
+                // Invalid word - clean up current turn and restart for same player
+                
+                // Stop current collector and timeout
+                msgCollector.stop('invalid_word');
+                clearLobbyTimeout(updatedLobby);
+                
                 let reason;
                 if (!isValidWord) {
                     reason = 'Invalid word';
@@ -998,6 +1019,8 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                     updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
                 }
                 
+                // Reset processing flag before restarting turn
+                updatedLobby.gameData.processingTurn = false;
                 saveLobbies();
                 await updateGameMessage();
                 
@@ -1010,16 +1033,22 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                     console.error('Failed to send invalid word message:', err);
                 }
 
-                // Reset the timer for the same player (don't advance turn)
-                clearLobbyTimeout(updatedLobby);
-                setPlayerTimeout(updatedLobby, interaction, playersInGame, endGame, nextTurn);
+                // Restart the turn for the same player with a small delay to prevent rapid-fire
+                setTimeout(async () => {
+                    const currentLobby = lobbies[guildId][gameId];
+                    if (currentLobby && currentLobby.gameData && currentLobby.gameData.isGameActive) {
+                        await nextTurn();
+                    }
+                }, 100);
+                return; // Exit early to prevent the collector.on('end') from interfering
             }
         });
 
         msgCollector.on('end', (collected, reason) => {
-            // Only handle timeout if it wasn't stopped by valid word or manual stop
-            if (reason === 'time' && currentLobby.gameData && currentLobby.gameData.isGameActive) {
-                // Timeout will be handled by the setTimeout callback
+            // Only handle timeout if it wasn't manually stopped and game is still active
+            if (reason === 'time' && currentLobby.gameData && currentLobby.gameData.isGameActive && !currentLobby.gameData.processingTurn) {
+                // The timeout callback will handle this case
+                console.log('Message collector ended due to timeout');
             }
         });
     };
