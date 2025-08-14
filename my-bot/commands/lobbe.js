@@ -193,7 +193,7 @@ function createGameEmbed(lobby, currentPlayerId) {
         .addFields(
             { name: 'Players & Lives', value: playersLives, inline: true },
             { name: '⏳ Elapsed Time', value: `${elapsedSeconds}s`, inline: true },
-            { name: '🔢 Words Played', value: wordsPlayedCount.toString(), inline: true },
+            { name: '📢 Words Played', value: wordsPlayedCount.toString(), inline: true },
             { name: '📜 Last 5 Events', value: logs.length > 0 ? logs.map(e => `• **${e.player === 'System' ? e.player : `<@${e.player}>`}**: \`${e.word}\` (${e.seq})`).join('\n') : 'None yet', inline: false },
             { name: `🔠 Used Letters (<@${currentPlayerId}>)`, value: formatLetters(currentPlayerLetters), inline: false }
         )
@@ -297,7 +297,7 @@ function setPlayerTimeout(lobby, interaction, playersInGame, endGameCallback, ne
             lobby.gameData.lives[currentPlayerId]--;
             lobby.gameData.logs.push({
                 player: currentPlayerId,
-                word: '❌ Timeout',
+                word: '⌛ Timeout',
                 seq: lobby.gameData.currentSeq
             });
             
@@ -994,11 +994,7 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                 await nextTurn();
                 
             } else {
-                // Invalid word - clean up current turn and restart for same player
-                
-                // Stop current collector and timeout
-                msgCollector.stop('invalid_word');
-                clearLobbyTimeout(updatedLobby);
+                // Invalid word - DON'T restart the turn, just show feedback and let timer continue
                 
                 let reason;
                 if (!isValidWord) {
@@ -1019,7 +1015,7 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                     updatedLobby.gameData.logs.splice(0, updatedLobby.gameData.logs.length - 5);
                 }
                 
-                // Reset processing flag before restarting turn
+                // Reset processing flag and update game display
                 updatedLobby.gameData.processingTurn = false;
                 saveLobbies();
                 await updateGameMessage();
@@ -1033,14 +1029,8 @@ async function startGame(i, interaction, lobby, guildId, gameId) {
                     console.error('Failed to send invalid word message:', err);
                 }
 
-                // Restart the turn for the same player with a small delay to prevent rapid-fire
-                setTimeout(async () => {
-                    const currentLobby = lobbies[guildId][gameId];
-                    if (currentLobby && currentLobby.gameData && currentLobby.gameData.isGameActive) {
-                        await nextTurn();
-                    }
-                }, 100);
-                return; // Exit early to prevent the collector.on('end') from interfering
+                // DON'T call nextTurn() - let the existing timer continue for the same player
+                return;
             }
         });
 
